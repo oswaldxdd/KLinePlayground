@@ -1,59 +1,40 @@
+# Windows x64 发布构建
 
-# 项目打包指南 (Windows)
+本仓库当前发布目标为 **KLinePlayground 美股 K 线复盘训练器 v3.3.0-us.1**。源码版本与 Windows 文件属性版本对应 `3.3.0-us.1` / `3.3.0.1`。
 
-> 本指南部分沿用上游 A 股项目的构建步骤。当前数据和账户路径已切换为美股；请先阅读 [README.md](README.md)。仓库已有的旧版可执行文件仍是上游 A 股版本，须按当前源码重建后使用。
+## 构建环境
 
-本文档为希望将本项目打包成独立 Windows 可执行程序 (`.exe`) 的开发者提供指导。
+- Windows x64，Python **3.12.10 x64**。
+- Microsoft Edge WebView2 Runtime（运行目标机需要；构建机使用系统 runtime）。
+- 构建依赖和全部解析后版本固定在 `requirements-release-win.lock.txt`。
+- PyWebView 使用 Windows 原生 WebView2 与 pythonnet；不安装 Qt 或 CEF。
 
-项目内已包含完整的打包脚本 (`install.bat`) 和 `PyInstaller` 配置文件 (`.spec`)。开发者无需自行配置，只需确保环境正确并执行脚本即可。
+从仓库根目录执行：
 
-## 打包流程概述
-
-本项目的打包过程通过 `install.bat` 脚本全自动完成，主要包含两个核心步骤：
-
-1.  **构建主应用**: 将所有 Python 源代码和依赖项打包成一个单文件的 `KLineTrainer.exe`。
-2.  **构建安装器**: 将 `KLineTrainer.exe` 和其他必要的资源（如数据文件夹结构）再次打包，生成一个最终的用户友好型安装程序。
-
-## 准备工作
-
-在运行打包脚本前，请确保你的环境满足以下条件：
-
-1.  **操作系统**: Windows。
-
-2.  **Python 环境**:
-    *   你已经创建了一个 Python 虚拟环境来管理项目依赖。
-    *   **重要**: 脚本默认的虚拟环境路径是 `.venv`。如果你的虚拟环境文件夹名称不同（例如 `my_env`），请**手动编辑 `install.bat` 文件**，将所有出现的 `.venv` 替换为你的虚拟环境文件夹名。
-
-3.  **安装依赖**:
-    *   首先，激活你的 Python 虚拟环境。例如，如果你的环境名为 `.venv`，在项目根目录运行：
-        ```bash
-        .\.venv\Scripts\activate
-        ```
-    *   然后，安装 `PyInstaller` 这个打包工具：
-        ```bash
-        pip install pyinstaller
-        ```
-    *   确保项目运行所需的其他库（如 `flask`, `pywebview` 等）也已安装。
-
-## 执行打包
-
-完成准备工作后，打包过程非常简单：
-
-1.  **打开命令行工具**: 在项目的根目录下，打开一个cmd命令行终端。
-
-2.  **运行打包脚本**: 直接执行 `install.bat` 脚本。
-    ```bash
-    .\install.bat
-    ```
-
-3.  **等待脚本执行**: 脚本会自动执行所有打包步骤。如果一切顺利，你会看到 "所有操作已成功完成！" 的提示。如果中途发生错误，脚本会暂停并显示错误信息，方便你进行排查。
-
-## 获取最终产物
-
-打包成功后，最终生成的可供分发的安装程序位于以下路径：
-
-```
-<项目根目录>\installer_source\dist\
+```powershell
+py -3.12 -m venv ..\.venv
+..\.venv\Scripts\python.exe -m pip install -r requirements-release-win.lock.txt
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build_us_release.ps1
 ```
 
-你可以在这个目录里找到最终的 `.exe` 安装文件。将这个文件执行就可以像安装普通软件一样安装并使用你的“A股K线复盘训练”应用了。
+构建脚本验证 Python/架构、固定工具链、pythonnet/EdgeChromium 模块，并拒绝包含 Qt 的构建环境。正式构建要求干净 Git 工作区；本地验证可以传 `-AllowDirty`，但产物清单会标记未提交源码，不能作为正式发行件。
+
+## 输出与检查
+
+产物写入仓库父级 `release-builds/` 的唯一构建目录，不清理或覆盖旧输出。ZIP 中包含：
+
+- `bin/KLineTrainer_US/`：美股训练器 EXE 和 PyInstaller onedir 运行库。
+- `bin/KLineTrainer_AI_Assistant/`：独立 AI 助手 EXE 和其运行库；只有该组件通过自己的 smoke 时才纳入。
+- `data/`、`users_us/`：首次运行写入的行情、设置、会话和用户训练数据目录。
+- `README.txt`、上游 `LICENSE`、`DEPENDENCIES.lock.txt`、`THIRD_PARTY_LICENSES/`、`release-manifest.json`。
+- ZIP 旁边的 `.sha256.txt` 文件。
+
+压缩前，两个冻结程序分别以 `--smoke` 无界面运行。主程序会检查静态页、yfinance 模块/数据源、离线训练、买入、同日卖出和结束报告接口；助手检查静态页与 Flask 健康接口。Smoke 只使用临时数据，不联网，也不把测试日志、AI Key 或用户数据放入 ZIP。最终仍应在干净的独立解压目录启动 GUI，检查 Edge WebView2 实际窗口和 AI 助手能否发现主会话。
+
+PowerShell 返回的 SHA256 也保存在 ZIP 旁边，例如：
+
+```powershell
+Get-FileHash .\KLinePlayground-US-v3.3.0-us.1-win-x64.zip -Algorithm SHA256
+```
+
+`install.bat` 现在只调用这个安全构建脚本；不要使用上游旧版安装包或旧 EXE 作为本次美股发布件。

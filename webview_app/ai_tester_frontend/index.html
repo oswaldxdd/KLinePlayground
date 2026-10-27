@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>美股训练 AI 助手</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="shell">
+        <header>
+            <div>
+                <p class="eyebrow">KLINE TRAINER · US MARKET</p>
+                <h1>美股训练 AI 助手</h1>
+                <p class="muted">连接主训练器，根据当前历史 K 线生成练习指令。</p>
+            </div>
+            <span id="connection-state" class="badge">检查连接中</span>
+        </header>
+
+        <section class="card">
+            <h2>模型设置</h2>
+            <div class="grid">
+                <label>API 地址
+                    <input id="base-url" type="url" placeholder="https://api.openai.com/v1">
+                </label>
+                <label>模型
+                    <input id="model" type="text" placeholder="gpt-4o-mini">
+                </label>
+                <label class="wide">API Key
+                    <input id="api-key" type="password" autocomplete="off" placeholder="输入兼容 OpenAI 的 API Key">
+                </label>
+                <label>分析 K 线数量
+                    <input id="bar-count" type="number" min="20" max="80" step="1">
+                </label>
+                <label>指标
+                    <select id="indicator-type">
+                        <option>MACD</option><option>KDJ</option><option>RSI</option><option>BOLL</option>
+                    </select>
+                </label>
+                <label class="check"><input id="include-indicator" type="checkbox">提供技术指标</label>
+                <label class="check"><input id="include-chip" type="checkbox">提供筹码分布</label>
+                <label class="wide">训练策略提示
+                    <textarea id="strategy" rows="4" placeholder="例如：控制回撤，避免追涨；买卖数量必须为整股。"></textarea>
+                </label>
+            </div>
+            <div class="actions">
+                <button id="save-btn" class="secondary">保存设置</button>
+                <button id="connect-btn" class="secondary">检查主程序连接</button>
+                <button id="analyze-btn" class="primary">分析并执行指令</button>
+            </div>
+            <p class="hint">API Key 仅保存在此电脑的 data 文件夹中，程序会做简单混淆；这不是加密保险箱。不要在共享电脑保存密钥。</p>
+        </section>
+
+        <section class="card">
+            <div class="log-heading"><h2>运行记录</h2><button id="clear-btn" class="text-button">清空</button></div>
+            <div id="log" class="log" role="log" aria-live="polite"><p class="muted">尚无记录。</p></div>
+        </section>
+        <footer>本工具用于历史行情训练，不构成投资建议。</footer>
+    </main>
+    <script src="app.js"></script>
+</body>
+</html>

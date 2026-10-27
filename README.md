@@ -22,7 +22,7 @@ python -m backend.app_enhanced
 
 在浏览器打开 `http://127.0.0.1:5000`。桌面版可安装 `webview_app/requirements_pywebview.txt` 后运行 `python webview_app/main_pywebview.py`。Windows 打包流程见 [BUILD_GUIDE.md](BUILD_GUIDE.md)。
 
-仓库中现有的旧版 `.exe` 是上游 A 股版本，本次没有重新构建安装包。使用当前美股版本请从源码运行，或先按打包指南重新构建。
+Windows x64 便携版可在 [GitHub Releases 最新版本](https://github.com/oswaldxdd/KLinePlayground/releases/latest) 下载。下载 `KLinePlayground-US-v3.3.0-us.1-win-x64.zip` 后请完整解压，再双击“启动美股训练器.cmd”。仓库中保留的旧版 `.exe` 是上游 A 股版本，不是当前美股版。
 
 ## 数据与账户文件
 

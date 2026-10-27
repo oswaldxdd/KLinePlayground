@@ -31,10 +31,18 @@ CORS(app)  # 允许跨域请求
 
 # 获取项目根目录，确保路径在项目内
 if getattr(sys, 'frozen', False):
-    # project_root = os.path.dirname(sys.executable)
-    project_root = os.path.join(os.path.dirname(sys.executable), '..')
+    executable_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if os.path.basename(os.path.dirname(executable_dir)).lower() == 'bin':
+        # Release layout: <root>/bin/<app>/<app>.exe
+        project_root = os.path.dirname(os.path.dirname(executable_dir))
+    elif os.path.basename(executable_dir).lower() == 'bin':
+        # Also support a flat <root>/bin/<app>.exe layout.
+        project_root = os.path.dirname(executable_dir)
+    else:
+        project_root = executable_dir
 else:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.abspath(project_root)
 users_dir_path = os.path.join(project_root, 'users_us')
 data_dir_path = os.path.join(project_root, 'data')
 
@@ -145,10 +153,7 @@ def get_user_statistics(username):
 
 def _update_api_info(user=None, enable=None):
     """更新或删除 api_info.json"""
-    if getattr(sys, 'frozen', False):
-        api_file_path = os.path.join(os.path.dirname(sys.executable), '..', 'data', 'ai_api_info.json')
-    else:
-        api_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'ai_api_info.json')
+    api_file_path = os.path.join(data_dir_path, 'ai_api_info.json')
     
     if enable is None and user:
         user_config = user_manager.get_user_config(user)
@@ -194,10 +199,7 @@ def _update_api_info(user=None, enable=None):
         print(f"写入 ai_api_info.json 失败: {e}")
 
 def get_ai_config():
-    if getattr(sys, 'frozen', False):
-        config_file = os.path.join(os.path.dirname(sys.executable), '..', 'data', '.ai_tester_config.enc')
-    else:
-        config_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', '.ai_tester_config.enc')
+    config_file = os.path.join(data_dir_path, '.ai_tester_config.enc')
         
     if not os.path.exists(config_file):
         return None

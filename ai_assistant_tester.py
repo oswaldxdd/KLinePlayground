@@ -1,3 +1,4 @@
+import argparse
 import base64
 import json
 import os
@@ -31,6 +32,10 @@ def get_runtime_base_dir() -> Path:
 def get_project_root() -> Path:
     base_dir = get_runtime_base_dir()
     if getattr(sys, "frozen", False):
+        if base_dir.parent.name.lower() == "bin":
+            return base_dir.parent.parent
+        if base_dir.name.lower() == "bin":
+            return base_dir.parent
         return base_dir
     return base_dir
 
@@ -396,13 +401,29 @@ class AITesterWebviewApp:
 
         icon_path = get_bundle_base() / "ai_assistant.ico"
         window = webview.create_window(
-            title="KLine Trainer AI 策略测试器",
+            title="美股训练 AI 助手 v3.3.0-us.1",
             url=f"http://127.0.0.1:{self.port}/",
             width=1380,
             height=920,
             text_select=True,
         )
         webview.start(debug=False)
+
+    def run_smoke_test(self):
+        if not self.frontend_dir.is_dir():
+            raise RuntimeError(f"AI tester 前端目录不存在: {self.frontend_dir}")
+        client = self.flask_app.test_client()
+        home = client.get("/")
+        health = client.get("/api/health")
+        if home.status_code != 200 or b"AI" not in home.data:
+            raise RuntimeError("AI tester 静态前端检查失败")
+        if health.status_code != 200 or health.get_json().get("status") != "ok":
+            raise RuntimeError("AI tester Flask 健康检查失败")
+        smoke_log = get_data_dir() / "package-smoke-ai.log"
+        smoke_log.parent.mkdir(parents=True, exist_ok=True)
+        smoke_log.write_text("PASS: AI tester static frontend and Flask health API\n", encoding="utf-8")
+        if sys.stdout:
+            print("PASS: AI tester static frontend and Flask health API")
 
 
 def main():
@@ -411,4 +432,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="美股训练 AI 助手")
+    parser.add_argument("--smoke", action="store_true", help="无界面检查前端资源和 Flask 健康接口")
+    options, _ = parser.parse_known_args()
+    tester_app = AITesterWebviewApp()
+    if options.smoke:
+        tester_app.run_smoke_test()
+    else:
+        tester_app.run()

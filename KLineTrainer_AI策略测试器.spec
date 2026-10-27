@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 
 
 a = Analysis(
     ['ai_assistant_tester.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
-    datas=[('ai_assistant.ico', '.'), ('webview_app/ai_tester_frontend', 'webview_app/ai_tester_frontend')],
-    hiddenimports=['webview'],
+    datas=[('ai_assistant.ico', '.'), ('webview_app/ai_tester_frontend', 'webview_app/ai_tester_frontend'), *collect_data_files('certifi')],
+    hiddenimports=['webview.platforms.edgechromium', 'webview.platforms.winforms', 'clr', 'clr_loader', 'pythonnet'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,11 +23,11 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='KLineTrainer_AI策略测试器',
+    name='KLineTrainer_AI_Assistant',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -35,5 +36,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['ai_assistant.ico'],
+    icon='ai_assistant.ico',
+    version='scripts/KLineTrainer_AI_Assistant.version.txt',
 )
