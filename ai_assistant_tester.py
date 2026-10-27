@@ -185,7 +185,7 @@ def build_prompt(config: dict, data_json: dict, account_json: dict) -> tuple[str
     total_shares = position_summary.get("total_shares", 0)
     available_shares = position_summary.get("available_shares", 0)
 
-    prompt = [f"你是一名 A 股交易 AI，当前复盘标的为《{stock_name}》。"]
+    prompt = [f"你是一名美股交易 AI，当前复盘标的为《{stock_name}》。"]
     if user_strategy:
         prompt.append("【用户策略】请严格遵守以下自然语言策略：")
         prompt.append(user_strategy)
@@ -199,9 +199,9 @@ def build_prompt(config: dict, data_json: dict, account_json: dict) -> tuple[str
     prompt.append(f"【当前时间】{current_bar['Date']}，最新收盘价={current_bar['Close']}")
     prompt.append(
         "请只返回一个合法 JSON，不要输出 Markdown。格式为："
-        '{"action":"buy/sell/hold/next","quantity":100,"reason":"说明原因"}'
+        '{"action":"buy/sell/hold/next","quantity":1,"reason":"说明原因"}'
     )
-    prompt.append("buy/sell 的 quantity 单位是股，必须是 100 的整数倍。")
+    prompt.append("buy/sell 的 quantity 单位是整股，必须为正整数；同一交易日允许买入后卖出。")
 
     return "\n\n".join(prompt), stock_name
 
@@ -270,10 +270,13 @@ def perform_ai_analysis(config: dict) -> dict:
         raise RuntimeError(f"模型返回的不是合法 JSON: {exc}: {content}")
 
     action = str(action_info.get("action", "next")).lower()
-    quantity = int(action_info.get("quantity", 100) or 100)
+    quantity = action_info.get("quantity")
+    if action in {"buy", "sell"} and (type(quantity) is not int or quantity <= 0):
+        raise ValueError("AI 买卖指令中的 quantity 必须为正整数股数，不接受小数或布尔值。")
     reason = str(action_info.get("reason", "") or "").strip()
     _append_log(logs, f"AI 理由: {reason or '未提供'}", "ai")
-    _append_log(logs, f"AI 指令: {action.upper()} / 数量 {quantity}", "success")
+    quantity_text = f"{quantity} 股" if action in {"buy", "sell"} else "—"
+    _append_log(logs, f"AI 指令: {action.upper()} / 数量 {quantity_text}", "success")
 
     result = {
         "logs": logs,
@@ -286,7 +289,7 @@ def perform_ai_analysis(config: dict) -> dict:
     if action in {"buy", "sell"}:
         trade_resp = requests.post(
             f"{base_url}/training/{training_id}/trade",
-            json={"action": action, "quantity": max(1, quantity // 100)},
+            json={"action": action, "quantity": quantity},
             timeout=30,
         )
         trade_json = trade_resp.json()
@@ -357,6 +360,8 @@ class AITesterWebviewApp:
             try:
                 save_config(payload)
                 return jsonify(perform_ai_analysis(payload))
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 500
 

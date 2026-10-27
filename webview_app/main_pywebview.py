@@ -1,7 +1,4 @@
-"""
-A股K线复盘训练 - PyWebView桌面版
-主程序入口
-"""
+"""美股 K 线复盘训练 PyWebView 桌面版入口。"""
 
 import os
 import sys
@@ -40,11 +37,11 @@ class KLineTrainerApp:
         try:
             # 确保数据目录存在
             if getattr(sys, 'frozen', False):
-                base_dir = Path(sys.executable).parent
+                base_dir = Path(sys.executable).parent.parent
             else:
                 base_dir = Path(__file__).parent.parent
             data_dir = base_dir / 'data'
-            users_dir = base_dir / 'users'
+            users_dir = base_dir / 'users_us'
             data_dir.mkdir(exist_ok=True)
             users_dir.mkdir(exist_ok=True)
             
@@ -64,6 +61,7 @@ class KLineTrainerApp:
             'flask-cors',
             'pandas',
             'numpy',
+            'yfinance',
             'pywebview'
         ]
         
@@ -101,7 +99,7 @@ def main():
     """主函数"""
     print()
     print("=" * 60)
-    print("A股K线复盘训练 - 桌面版 v3.0")
+    print("美股K线复盘训练 - 桌面版")
     print("=" * 60)
     print()
     
@@ -147,7 +145,7 @@ def main():
     try:
         # 创建窗口
         window = webview.create_window(
-            title='A股K线复盘训练 - 桌面版',
+            title='美股K线复盘训练 - 桌面版',
             url=f"http://127.0.0.1:{app_instance.port}/",
             width=1400,
             height=900,

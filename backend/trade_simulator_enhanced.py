@@ -1,15 +1,17 @@
 import sqlite3
 import os
 import json
+from contextlib import closing
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime
+from numbers import Integral
 from typing import List, Dict, Optional
 import pandas as pd
 
 
 def calculate_trade_performance(trade_history):
     """
-    根据交易历史计算胜率 (考虑手数)。
+    根据交易历史计算胜率（按整股数量）。
     使用先进先出 (FIFO) 原则，并能处理部分平仓。
     """
     # 使用双端队列存储买入批次: {'quantity': X, 'net_amount': Y, ...其他信息}
@@ -18,7 +20,7 @@ def calculate_trade_performance(trade_history):
     completed_trades = []
 
     for trade in trade_history:
-        # quantity=1 代表1手(100股)，所有计算基于'手'
+        # quantity is the number of shares.
         trade_qty = trade['quantity']
 
         if trade['action'] == 'buy':
@@ -78,7 +80,7 @@ def calculate_trade_performance(trade_history):
 class TradeSimulatorEnhanced:
     """增强版交易模拟器，支持持仓汇总、佣金设置、bar ID记录等功能"""
     
-    def __init__(self, user: str, initial_capital: float, stock_code: str):
+    def __init__(self, user: str, initial_capital: float, stock_code: str, users_dir: str = '../users_us'):
         self.user = user
         self.stock_code = stock_code
         self.initial_capital = initial_capital
@@ -87,24 +89,24 @@ class TradeSimulatorEnhanced:
         self.current_bar_id = 0  # 当前bar ID
         
         # 交易成本设置（可配置）
-        self.commission_rate = 0.0003  # 万分之三佣金
-        self.min_commission = 5.0      # 最低佣金5元
-        self.stamp_tax_rate = 0.001    # 千分之一印花税（仅卖出）
+        self.commission_rate = 0.0
+        self.min_commission = 0.0
+        self.stamp_tax_rate = 0.0
         
         # 持仓信息（汇总模式）
         self.total_shares = 0          # 总持股数
-        self.available_shares = 0      # 可卖出股数（T+1限制）
+        self.available_shares = 0      # 美股训练按 T+0 计算可卖股数
         self.average_cost = 0.0        # 平均成本价
         self.total_cost = 0.0          # 总成本
         
-        # 持仓明细（用于T+1计算）
+        # 持仓明细
         self.position_lots = []        # 持仓批次列表
         
         # 交易记录
         self.trade_history = []
         
         # 数据库连接
-        self.db_path = f'../users/{user}/trade_records.db'
+        self.db_path = os.path.join(users_dir, user, 'trade_records_us.db')
         self._init_database()
     
     def _init_database(self):
@@ -181,21 +183,21 @@ class TradeSimulatorEnhanced:
         return max(commission, self.min_commission)
     
     def _calculate_stamp_tax(self, amount: float) -> float:
-        """计算印花税（仅卖出时收取）"""
+        """计算配置的额外卖出费用。"""
         return round(amount * self.stamp_tax_rate,2)
     
     def get_max_buyable_quantity(self) -> int:
-        """根据可用资金、佣金、股价动态计算最大可买数量（手数）"""
+        """根据可用资金、佣金、股价动态计算最大可买整股数。"""
         if self.current_price <= 0:
             return 0
         
         # 二分查找最大可买手数
-        left, right = 0, int(self.current_capital / (self.current_price * 100))
+        left, right = 0, int(self.current_capital / self.current_price)
         max_quantity = 0
         
         while left <= right:
             mid = (left + right) // 2
-            shares = mid * 100
+            shares = mid
             amount = shares * self.current_price
             commission = self._calculate_commission(amount)
             total_cost = amount + commission
@@ -209,25 +211,26 @@ class TradeSimulatorEnhanced:
         return max_quantity
     
     def buy(self, quantity: int, price: float, trade_date: str) -> Dict:
-        """买入股票（quantity为手数）"""
+        """买入股票（quantity 为整股数）。"""
         try:
             # 验证买入数量
-            if quantity <= 0:
+            if isinstance(quantity, bool) or not isinstance(quantity, Integral) or quantity <= 0:
                 return {
                     'success': False,
-                    'message': '买入数量必须大于0'
+                    'message': '交易数量必须为正整数股数'
                 }
+            quantity = int(quantity)
             
             # 检查是否超过最大可买数量
             max_quantity = self.get_max_buyable_quantity()
             if quantity > max_quantity:
                 return {
                     'success': False,
-                    'message': f'超过最大可买数量，最大可买 {max_quantity} 手'
+                    'message': f'超过最大可买数量，最大可买 {max_quantity} 股'
                 }
             
             # 计算交易金额
-            total_shares = quantity * 100
+            total_shares = quantity
             amount = total_shares * price
             
             # 计算佣金
@@ -240,7 +243,7 @@ class TradeSimulatorEnhanced:
             if total_cost > self.current_capital:
                 return {
                     'success': False,
-                    'message': f'资金不足，需要 ¥{total_cost:.2f}，可用 ¥{self.current_capital:.2f}'
+                    'message': f'资金不足，需要 ${total_cost:.2f}，可用 ${self.current_capital:.2f}'
                 }
             
             # 执行买入
@@ -260,15 +263,15 @@ class TradeSimulatorEnhanced:
                 self.total_cost = amount
                 self.total_shares = total_shares
             
-            # 添加持仓批次（T+1规则，次日才能卖出）
-            next_day = (pd.to_datetime(trade_date) + timedelta(days=1)).strftime('%Y-%m-%d')
+            # 美股训练按同一模拟交易日即可卖出处理。
+            available_date = trade_date
             position_lot = {
                 'stock_code': self.stock_code,
                 'quantity': total_shares,
                 'cost_price': price,
                 'buy_date': trade_date,
                 'buy_bar_id': self.current_bar_id,
-                'available_date': next_day,
+                'available_date': available_date,
                 'status': 'active'
             }
             self.position_lots.append(position_lot)
@@ -285,7 +288,7 @@ class TradeSimulatorEnhanced:
                     last_trade['commission'] += commission
                     last_trade['net_amount'] += total_cost
                     # 重新计算平均价格
-                    last_trade['price'] = last_trade['amount'] / (last_trade['quantity'] * 100)
+                    last_trade['price'] = last_trade['amount'] / last_trade['quantity']
                     last_trade['timestamp'] = datetime.now().isoformat()
                     trade_record = last_trade
                     merged = True
@@ -294,7 +297,7 @@ class TradeSimulatorEnhanced:
                 trade_record = {
                     'stock_code': self.stock_code,
                     'action': 'buy',
-                    'quantity': quantity,  # 记录手数
+                    'quantity': quantity,  # 记录股数
                     'price': price,
                     'amount': amount,
                     'commission': commission,
@@ -313,7 +316,7 @@ class TradeSimulatorEnhanced:
             return {
                 'success': True,
                 'trade': trade_record,
-                'message': f'买入成功，成交 {quantity} 手，成本 ¥{total_cost:.2f}'
+                'message': f'买入成功，成交 {quantity} 股，成本 ${total_cost:.2f}'
             }
         except Exception as e:
             return {
@@ -322,24 +325,25 @@ class TradeSimulatorEnhanced:
             }
     
     def sell(self, quantity: int, price: float, trade_date: str) -> Dict:
-        """卖出股票（quantity为手数）"""
+        """卖出股票（quantity 为整股数）。"""
         try:
             # 验证卖出数量
-            if quantity <= 0:
+            if isinstance(quantity, bool) or not isinstance(quantity, Integral) or quantity <= 0:
                 return {
                     'success': False,
-                    'message': '卖出数量必须大于0'
+                    'message': '交易数量必须为正整数股数'
                 }
+            quantity = int(quantity)
             
             # 计算实际股数
-            total_shares = quantity * 100
+            total_shares = quantity
             
-            # 检查可卖出股数（T+1规则）
+            # 检查当前可卖股数。
             available_shares = self._get_available_shares(trade_date)
             if total_shares > available_shares:
                 return {
                     'success': False,
-                    'message': f'可卖出股数不足，可卖 {available_shares//100} 手，尝试卖出 {quantity} 手'
+                    'message': f'可卖出股数不足，可卖 {available_shares} 股，尝试卖出 {quantity} 股'
                 }
             
             # 计算交易金额
@@ -370,7 +374,7 @@ class TradeSimulatorEnhanced:
                     last_trade['stamp_tax'] += stamp_tax
                     last_trade['net_amount'] += net_amount
                     # 重新计算平均价格
-                    last_trade['price'] = last_trade['amount'] / (last_trade['quantity'] * 100)
+                    last_trade['price'] = last_trade['amount'] / last_trade['quantity']
                     last_trade['timestamp'] = datetime.now().isoformat()
                     trade_record = last_trade
                     merged = True
@@ -379,7 +383,7 @@ class TradeSimulatorEnhanced:
                 trade_record = {
                     'stock_code': self.stock_code,
                     'action': 'sell',
-                    'quantity': quantity,  # 记录手数
+                    'quantity': quantity,  # 记录股数
                     'price': price,
                     'amount': amount,
                     'commission': commission,
@@ -397,7 +401,7 @@ class TradeSimulatorEnhanced:
             return {
                 'success': True,
                 'trade': trade_record,
-                'message': f'卖出成功，成交 {quantity} 手，净收入 ¥{net_amount:.2f}'
+                'message': f'卖出成功，成交 {quantity} 股，净收入 ${net_amount:.2f}'
             }
         except Exception as e:
             return {
@@ -406,7 +410,7 @@ class TradeSimulatorEnhanced:
             }
     
     def _get_available_shares(self, current_date: str) -> int:
-        """获取可卖出股数（考虑T+1规则）"""
+        """获取当前日期可卖出的整股数量。"""
         current_dt = pd.to_datetime(current_date)
         available = 0
         
@@ -506,7 +510,7 @@ class TradeSimulatorEnhanced:
         """获取包含bar ID的交易历史"""
         return self.trade_history.copy()
     
-    def generate_report(self, stock_code: str, start_date: str, end_date: str) -> Dict:
+    def generate_report(self, stock_code: str, start_date: str, end_date: str, stock_name: Optional[str] = None) -> Dict:
         """生成复盘报告"""
         account_info = self.get_account_info(end_date)
         
@@ -547,7 +551,8 @@ class TradeSimulatorEnhanced:
         return {
             'session_id': getattr(self, 'session_id', ''),
             'stock_code': stock_code,
-            'stock_name': f'股票{stock_code}',
+            'stock_name': stock_name or stock_code,
+            'currency': 'USD',
             'start_date': start_date,
             'end_date': end_date,
             'initial_capital': self.initial_capital,
@@ -590,7 +595,7 @@ class TradeSimulatorEnhanced:
     
     def _save_trade_to_db(self, trade: Dict, update: bool = False):
         """保存交易记录到数据库"""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             
             if update:
@@ -628,7 +633,7 @@ class TradeSimulatorEnhanced:
     
     def _save_position_lot_to_db(self, lot: Dict):
         """保存持仓批次到数据库"""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -647,7 +652,7 @@ class TradeSimulatorEnhanced:
     
     def _update_position_lots_in_db(self):
         """更新数据库中的持仓批次状态"""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             
             for lot in self.position_lots:

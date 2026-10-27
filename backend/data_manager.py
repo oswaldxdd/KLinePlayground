@@ -2,11 +2,13 @@ import csv
 import json
 import os
 import random
+import re
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-import akshare as ak
 import pandas as pd
+import yfinance as yf
 
 try:
     from xtquant import xtdata
@@ -24,14 +26,16 @@ except ImportError:
 
 
 class DataManager:
-    """管理股票数据下载、缓存、周K合成以及离线增量补数。"""
+    """管理美股行情下载、缓存、周K合成以及离线增量补数。"""
 
     def __init__(self, data_dir: str = "./data"):
         self.data_dir = data_dir
-        self.kline_dir = os.path.join(data_dir, "kline_raw")
-        self.factor_dir = os.path.join(data_dir, "factor")
-        self.dividend_dir = os.path.join(data_dir, "ex_dividend")
-        self.offline_dir = os.path.join(data_dir, "a_market_offline")
+        # Separate paths prevent old A-share files from being interpreted as US symbols.
+        self.market_data_dir = os.path.join(data_dir, "us_market")
+        self.kline_dir = os.path.join(self.market_data_dir, "kline_raw")
+        self.factor_dir = os.path.join(self.market_data_dir, "factor")
+        self.dividend_dir = os.path.join(self.market_data_dir, "corporate_actions")
+        self.offline_dir = os.path.join(data_dir, "us_market_offline")
 
         os.makedirs(self.kline_dir, exist_ok=True)
         os.makedirs(self.factor_dir, exist_ok=True)
@@ -40,40 +44,29 @@ class DataManager:
 
         self.stock_list = None
         self.stock_names: Dict[str, str] = {}
+        self._refreshed_symbols = set()
+        self._last_data_error: Dict[str, str] = {}
         self._offline_stock_codes_cache: Optional[List[str]] = None
         self._offline_date_range_cache: Dict[str, Optional[Tuple[pd.Timestamp, pd.Timestamp]]] = {}
 
+    US_WATCHLIST = {
+        "AAPL": "Apple", "AMZN": "Amazon", "AVGO": "Broadcom", "BRK-B": "Berkshire Hathaway",
+        "COST": "Costco", "GOOGL": "Alphabet", "JPM": "JPMorgan Chase", "LLY": "Eli Lilly",
+        "META": "Meta Platforms", "MSFT": "Microsoft", "NVDA": "NVIDIA", "TSLA": "Tesla",
+        "UNH": "UnitedHealth", "V": "Visa", "WMT": "Walmart",
+    }
+
     def download_stock_list(self) -> bool:
-        """下载 A 股股票列表。"""
-        try:
-            stock_list = ak.stock_info_a_code_name()
-            stock_list["code"] = stock_list["code"].astype(str).str.zfill(6)
-
-            stock_list_path = os.path.join(self.data_dir, "stock_list.csv")
-            stock_list.to_csv(stock_list_path, index=False, encoding="utf-8")
-
-            self.stock_names = dict(zip(stock_list["code"], stock_list["name"]))
-            with open(os.path.join(self.data_dir, "stock_names.json"), "w", encoding="utf-8") as f:
-                json.dump(self.stock_names, f, ensure_ascii=False, indent=2)
-
-            self.stock_list = stock_list
-            return True
-        except Exception as e:
-            print(f"下载股票列表失败: {e}")
-            return False
+        """使用内置的高流动性美股样例列表供盲盒模式使用。"""
+        self.stock_list = pd.DataFrame(
+            [{"code": code, "name": name} for code, name in self.US_WATCHLIST.items()]
+        )
+        self.stock_names = dict(self.US_WATCHLIST)
+        return True
 
     def load_stock_list(self) -> bool:
         """加载股票列表缓存。"""
         try:
-            stock_list_path = os.path.join(self.data_dir, "stock_list.csv")
-            names_path = os.path.join(self.data_dir, "stock_names.json")
-
-            if os.path.exists(stock_list_path) and os.path.exists(names_path):
-                self.stock_list = pd.read_csv(stock_list_path, dtype={"code": str})
-                with open(names_path, "r", encoding="utf-8") as f:
-                    self.stock_names = json.load(f)
-                return True
-
             return self.download_stock_list()
         except Exception as e:
             print(f"加载股票列表失败: {e}")
@@ -83,31 +76,13 @@ class DataManager:
         """返回当前可用数据源列表。"""
         return [
             {
-                "value": "akshare",
-                "label": "AKShare",
+                "value": "yfinance",
+                "label": "Yahoo Finance（yfinance）",
                 "available": True,
                 "kind": "online",
                 "supports_incremental_sync": True,
-                "supports_factor": True,
-                "description": "免费公网源，默认推荐。",
-            },
-            {
-                "value": "xtdata",
-                "label": "XTQuant / xtdata",
-                "available": XTDATA_AVAILABLE,
-                "kind": "online",
-                "supports_incremental_sync": True,
-                "supports_factor": True,
-                "description": "QMT 本地数据源，需要本机已安装相关环境。",
-            },
-            {
-                "value": "mootdx",
-                "label": "mootdx",
-                "available": MOOTDX_AVAILABLE,
-                "kind": "online",
-                "supports_incremental_sync": True,
                 "supports_factor": False,
-                "description": "通达信协议源，适合作为补充在线源。",
+                "description": "免密钥历史行情；受 Yahoo Finance 覆盖范围、限流和网络可用性影响。",
             },
             {
                 "value": "offline",
@@ -116,7 +91,7 @@ class DataManager:
                 "kind": "offline",
                 "supports_incremental_sync": False,
                 "supports_factor": True,
-                "description": "读取 data/a_market_offline 中的本地文件。",
+                "description": "读取 data/us_market_offline 中的本地美股文件。",
             },
         ]
 
@@ -139,22 +114,20 @@ class DataManager:
 
     def _normalize_stock_code(self, stock_code: str) -> str:
         code = str(stock_code or "").strip().upper()
-        if "." in code:
-            code = code.split(".", 1)[0]
-        digits = "".join(ch for ch in code if ch.isdigit())
-        if not digits:
+        # Yahoo symbols may contain a dot (BRK.B), dash (BRK-B), or caret (^GSPC).
+        # Keep the full symbol: stripping punctuation can silently select another security.
+        # The public UI accepts common US ticker symbols (including BRK-B), not
+        # Yahoo suffixes for other exchanges or FX/crypto/index instruments.
+        if not re.fullmatch(r"[A-Z][A-Z0-9-]{0,9}", code):
             return ""
-        return digits[-6:].zfill(6)
+        return code
 
     def _get_offline_file(self, stock_code: str) -> Optional[str]:
         stock_code = self._normalize_stock_code(stock_code)
         if not stock_code:
             return None
-        for suffix in (".SZ", ".SH", ".BJ"):
-            candidate = os.path.join(self.offline_dir, f"{stock_code}{suffix}.csv")
-            if os.path.exists(candidate):
-                return candidate
-        return None
+        candidate = os.path.join(self.offline_dir, f"{stock_code}.csv")
+        return candidate if os.path.isfile(candidate) else None
 
     def _read_csv_with_fallback(self, path: str, **kwargs) -> pd.DataFrame:
         last_error = None
@@ -259,13 +232,7 @@ class DataManager:
         return list(self._offline_stock_codes_cache)
 
     def _filter_stock_codes_by_sector(self, stock_codes: List[str], sector: str) -> List[str]:
-        if sector == "main":
-            prefixes = ("60", "000", "001", "003")
-            return [code for code in stock_codes if code.startswith(prefixes)]
-        if sector == "gem":
-            return [code for code in stock_codes if code.startswith("30")]
-        if sector == "sme":
-            return [code for code in stock_codes if code.startswith("002")]
+        # Retained for API compatibility; the former A-share board filters do not apply.
         return list(stock_codes)
 
     def _resolve_training_range(self, date_start: str, date_end: str) -> Tuple[pd.Timestamp, pd.Timestamp]:
@@ -349,7 +316,7 @@ class DataManager:
     def _get_stock_date_range(
         self,
         stock_code: str,
-        source: str = "akshare",
+        source: str = "yfinance",
         interval: str = "daily",
     ) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
         stock_code = self._normalize_stock_code(stock_code)
@@ -362,29 +329,8 @@ class DataManager:
         return data["date"].min(), data["date"].max()
 
     def get_stock_universe(self, market: str = "all") -> List[str]:
-        if self.stock_list is None:
-            self.load_stock_list()
-
-        market_key = (market or "all").lower()
-        if self.stock_list is None or self.stock_list.empty:
-            stock_codes = self._get_offline_stock_codes()
-            if market_key == "sh":
-                return [code for code in stock_codes if code.startswith(("60", "68", "69"))]
-            if market_key == "sz":
-                return [code for code in stock_codes if code.startswith(("00", "001", "002", "003", "30"))]
-            if market_key == "bj":
-                return [code for code in stock_codes if code.startswith(("43", "83", "87", "92"))]
-            return stock_codes
-
-        stock_codes = self.stock_list["code"].dropna().astype(str).str.zfill(6)
-        if market_key == "sh":
-            stock_codes = stock_codes[stock_codes.str.startswith(("60", "68", "69"))]
-        elif market_key == "sz":
-            stock_codes = stock_codes[stock_codes.str.startswith(("00", "001", "002", "003", "30"))]
-        elif market_key == "bj":
-            stock_codes = stock_codes[stock_codes.str.startswith(("43", "83", "87", "92"))]
-
-        return stock_codes.drop_duplicates().tolist()
+        offline_codes = self._get_offline_stock_codes()
+        return sorted(set(self.US_WATCHLIST) | set(offline_codes))
 
     def _normalize_daily_kline(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
         if df is None or df.empty:
@@ -394,7 +340,25 @@ class DataManager:
         if "股票代码" in data.columns:
             data = data.drop(columns=["股票代码"])
 
-        if "日期" in data.columns:
+        if "Date" in data.columns or "Datetime" in data.columns:
+            date_column = "Date" if "Date" in data.columns else "Datetime"
+            rename_map = {
+                date_column: "date",
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+                "Adj Close": "adj_close",
+                "Dividends": "dividends",
+                "Stock Splits": "stock_splits",
+            }
+            data = data.rename(columns=rename_map)
+            if "amount" not in data.columns and {"close", "volume"}.issubset(data.columns):
+                data["amount"] = data["close"] * data["volume"]
+            if "turnover_rate" not in data.columns:
+                data["turnover_rate"] = 0.0
+        elif "日期" in data.columns:
             rename_map = {
                 "日期": "date",
                 "开盘": "open",
@@ -447,7 +411,7 @@ class DataManager:
             return None
 
         data["date"] = self._parse_date_series(data["date"])
-        for col in ["open", "close", "high", "low", "volume", "amount", "turnover_rate"]:
+        for col in ["open", "close", "high", "low", "volume", "amount", "turnover_rate", "adj_close", "dividends", "stock_splits"]:
             if col in data.columns:
                 data[col] = pd.to_numeric(data[col], errors="coerce")
 
@@ -606,7 +570,7 @@ class DataManager:
         return range_start, range_end
 
     def _supports_factor_refresh(self, source: str) -> bool:
-        return source in {"akshare", "xtdata"}
+        return False
 
     def _fetch_stock_bundle(
         self,
@@ -615,11 +579,60 @@ class DataManager:
         source: str,
         end_date: Optional[str] = None,
     ) -> Dict[str, Optional[pd.DataFrame]]:
-        if source == "xtdata":
-            return self._fetch_stock_bundle_xt(stock_code, start_date, end_date=end_date)
-        if source == "mootdx":
-            return self._fetch_stock_bundle_mootdx(stock_code, start_date, end_date=end_date)
-        return self._fetch_stock_bundle_ak(stock_code, start_date, end_date=end_date)
+        if source != "yfinance":
+            raise ValueError("仅支持 Yahoo Finance 在线数据和本地离线数据")
+        stock_code = self._normalize_stock_code(stock_code)
+        if not stock_code:
+            raise ValueError("请输入有效的美股代码，例如 AAPL 或 BRK-B")
+
+        exclusive_end = (pd.to_datetime(end_date) + timedelta(days=1)).strftime("%Y-%m-%d") if end_date else None
+        history = None
+        ticker = None
+        last_error = None
+        for attempt in range(2):
+            try:
+                ticker = yf.Ticker(stock_code)
+                history = ticker.history(
+                    start=start_date,
+                    end=exclusive_end,
+                    interval="1d",
+                    auto_adjust=False,
+                    actions=True,
+                    timeout=20,
+                )
+                if history is not None and not history.empty:
+                    break
+                last_error = RuntimeError("Yahoo Finance returned no daily price rows")
+            except Exception as exc:
+                last_error = exc
+            if attempt == 0:
+                time.sleep(0.5)
+
+        if history is None or history.empty:
+            raise RuntimeError(
+                f"Yahoo Finance 暂时未返回 {stock_code} 的行情；请核对美股代码和日期，并检查网络后重试。"
+            ) from last_error
+
+        try:
+            metadata = ticker.get_history_metadata()
+        except Exception as exc:
+            raise RuntimeError(f"无法确认 {stock_code} 的币种和交易所信息，已停止导入行情") from exc
+        if metadata.get("currency") != "USD" or metadata.get("exchangeTimezoneName") != "America/New_York":
+            raise ValueError(f"{stock_code} 不是以美元计价的美国市场标的，无法用于本训练器")
+
+        history = history.copy().rename_axis("Date").reset_index()
+        if "Date" not in history.columns and "Datetime" in history.columns:
+            history = history.rename(columns={"Datetime": "Date"})
+        if "Date" in history.columns and isinstance(history["Date"].dtype, pd.DatetimeTZDtype):
+            history["Date"] = history["Date"].dt.tz_localize(None)
+        daily_df = self._normalize_daily_kline(history)
+        factor_df = None
+        if daily_df is not None and "adj_close" in daily_df.columns:
+            factor_data = daily_df[["date", "adj_close", "close"]].copy()
+            factor_data["factor"] = factor_data["adj_close"] / factor_data["close"]
+            factor_df = factor_data[["date", "factor"]].replace([float("inf"), -float("inf")], pd.NA).dropna()
+            daily_df = daily_df.drop(columns=["adj_close"], errors="ignore")
+        return {"kline": daily_df, "factor": factor_df}
 
     def _fetch_stock_bundle_ak(
         self,
@@ -892,13 +905,17 @@ class DataManager:
 
         return True
 
-    def download_stock_data(self, stock_code: str, start_date: str = "2010-01-01", source: str = "akshare") -> bool:
+    def download_stock_data(self, stock_code: str, start_date: str = "2010-01-01", source: str = "yfinance") -> bool:
         """下载并缓存单只股票的日线数据。"""
         stock_code = self._normalize_stock_code(stock_code)
         try:
             bundle = self._fetch_stock_bundle(stock_code, start_date, source)
-            return self._save_bundle_to_cache(stock_code, bundle.get("kline"), bundle.get("factor"))
+            saved = self._save_bundle_to_cache(stock_code, bundle.get("kline"), bundle.get("factor"))
+            if saved:
+                self._last_data_error.pop(stock_code, None)
+            return saved
         except Exception as e:
+            self._last_data_error[stock_code] = str(e)
             print(f"下载股票 {stock_code} 数据失败: {e}")
             return False
 
@@ -919,11 +936,13 @@ class DataManager:
     def get_stock_data(
         self,
         stock_code: str,
-        source: str = "akshare",
+        source: str = "yfinance",
         interval: str = "daily",
     ) -> Optional[pd.DataFrame]:
         """获取股票 K 线数据，支持日K与周K。"""
         stock_code = self._normalize_stock_code(stock_code)
+        if source not in {"yfinance", "offline"}:
+            return None
         try:
             if source == "offline":
                 offline_path = self._get_offline_file(stock_code)
@@ -937,6 +956,19 @@ class DataManager:
                     if not self.download_stock_data(stock_code, start_date="2010-01-01", source=source):
                         return None
                     normalized = self._load_cached_kline(stock_code)
+                elif source == "yfinance" and not normalized.empty and stock_code not in self._refreshed_symbols:
+                    # Refresh full history once per process to keep older rows on
+                    # the same Yahoo split-adjustment basis as newly fetched rows.
+                    try:
+                        bundle = self._fetch_stock_bundle(stock_code, "1900-01-01", source)
+                        refreshed = bundle.get("kline")
+                        if refreshed is not None and not refreshed.empty:
+                            normalized = refreshed
+                            self._save_bundle_to_cache(stock_code, normalized, bundle.get("factor"))
+                    except Exception as exc:
+                        print(f"更新 {stock_code} 行情缓存失败，继续使用本地副本: {exc}")
+                    finally:
+                        self._refreshed_symbols.add(stock_code)
 
             if normalized is None:
                 return None
@@ -953,7 +985,7 @@ class DataManager:
     def get_factor_data(
         self,
         stock_code: str,
-        source: str = "akshare",
+        source: str = "yfinance",
         interval: str = "daily",
     ) -> Optional[pd.DataFrame]:
         """获取复权因子数据，周K会按周最后一个交易日聚合。"""
@@ -997,13 +1029,13 @@ class DataManager:
         stock_code = self._normalize_stock_code(stock_code)
         if not self.stock_names:
             self.load_stock_list()
-        return self.stock_names.get(stock_code, f"股票{stock_code}")
+        return self.stock_names.get(stock_code, stock_code)
 
     def get_training_validation_error(
         self,
         stock_code: str,
         start_date: str,
-        source: str = "akshare",
+        source: str = "yfinance",
         interval: str = "daily",
     ) -> Optional[str]:
         stock_code = self._normalize_stock_code(stock_code)
@@ -1021,6 +1053,8 @@ class DataManager:
                 if self._get_offline_file(stock_code) is None:
                     return "指定股票在离线数据中不存在"
                 return "指定股票在离线数据中没有可用数据"
+            if source == "yfinance" and stock_code in self._last_data_error:
+                return f"Yahoo Finance 行情下载失败：{self._last_data_error[stock_code]}"
             return "指定股票暂无可用数据，请切换数据源或稍后重试"
 
         min_date = data["date"].min()
@@ -1036,7 +1070,7 @@ class DataManager:
         self,
         stock_code: str,
         start_date: str,
-        source: str = "akshare",
+        source: str = "yfinance",
         interval: str = "daily",
     ) -> bool:
         """验证股票代码和起始日期是否有效。"""
@@ -1052,7 +1086,7 @@ class DataManager:
         sector: str = "all",
         date_start: str = "2024-01-01",
         date_end: str = "2026-01-01",
-        source: str = "akshare",
+        source: str = "yfinance",
         interval: str = "daily",
     ) -> Tuple[str, str]:
         """随机选择股票与起始日期。"""
@@ -1084,7 +1118,7 @@ class DataManager:
         if self.stock_list is None or self.stock_list.empty:
             raise ValueError("股票列表为空，无法随机选择股票")
 
-        stock_codes = self.stock_list["code"].dropna().astype(str).str.zfill(6).drop_duplicates().tolist()
+        stock_codes = self.stock_list["code"].dropna().astype(str).drop_duplicates().tolist()
         stock_codes = self._filter_stock_codes_by_sector(stock_codes, sector)
         if not stock_codes:
             raise ValueError("所选板块下没有可用股票")
@@ -1108,12 +1142,12 @@ class DataManager:
         existing_path = self._get_offline_file(stock_code)
         if existing_path:
             return existing_path
-        return os.path.join(self.offline_dir, f"{stock_code}{self._get_market_suffix(stock_code)}.csv")
+        return os.path.join(self.offline_dir, f"{stock_code}.csv")
 
     def sync_offline_data(
         self,
         stock_code: str,
-        source: str = "akshare",
+        source: str = "yfinance",
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         force_full: bool = False,
@@ -1145,6 +1179,10 @@ class DataManager:
 
             if force_full:
                 segments_to_fetch.append((request_start, request_end))
+            elif source == "yfinance":
+                # Yahoo rescales historical prices after splits. Re-download the
+                # full local span in one request before writing a coherent snapshot.
+                segments_to_fetch.append((min(request_start, local_start), max(request_end, local_end)))
             else:
                 head_end = min(request_end, local_start - timedelta(days=1))
                 if request_start <= head_end:

@@ -8,7 +8,7 @@ from backend.history_manager import HistoryManager
 class UserManagerEnhanced:
     """增强版用户管理器，集成历史记录管理功能"""
     
-    def __init__(self, users_dir='../users'):
+    def __init__(self, users_dir='../users_us'):
         self.users_dir = users_dir
         self.history_manager = HistoryManager(users_dir)
         os.makedirs(users_dir, exist_ok=True)
@@ -43,10 +43,11 @@ class UserManagerEnhanced:
                 'username': username,
                 'created_at': datetime.now().isoformat(),
                 'settings': {
-                    'commission_rate': 0.0003,  # 万分之3
-                    'min_commission': 5.0,      # 最低5元
-                    'stamp_tax_rate': 0.001,    # 千分之1
-                    'adjustment_mode': 'forward',  # 默认使用稳定前复权
+                    'commission_rate': 0.0,
+                    'min_commission': 0.0,
+                    'stamp_tax_rate': 0.0,
+                    'adjustment_mode': 'none',
+                    'trading_market': 'us',
                     'default_initial_capital': 100000, # 默认初始资金
                     'ma_periods': [5, 10, 20], # 默认MA周期
                     'theme': 'light',
@@ -89,7 +90,18 @@ class UserManagerEnhanced:
             config_path = os.path.join(self.users_dir, username, 'config.json')
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    config = json.load(f)
+                settings = config.setdefault('settings', {})
+                if settings.get('trading_market') != 'us':
+                    # Carry user identity and display preferences forward, but do not
+                    # apply A-share-specific fees or adjustment defaults to USD training.
+                    settings['commission_rate'] = 0.0
+                    settings['min_commission'] = 0.0
+                    settings['stamp_tax_rate'] = 0.0
+                    settings['adjustment_mode'] = 'none'
+                    settings['trading_market'] = 'us'
+                    self.update_user_config(username, config)
+                return config
             return None
         except Exception as e:
             print(f"获取用户配置失败: {e}")

@@ -8,14 +8,14 @@ import pandas as pd
 class HistoryManager:
     """历史记录管理器，负责存储和管理用户的训练历史记录"""
     
-    def __init__(self, users_dir='../users'):
+    def __init__(self, users_dir='../users_us'):
         self.users_dir = users_dir
     
     def _get_user_db_path(self, username: str) -> str:
         """获取用户数据库路径"""
         user_dir = os.path.join(self.users_dir, username)
         os.makedirs(user_dir, exist_ok=True)
-        return os.path.join(user_dir, 'training_history.db')
+        return os.path.join(user_dir, 'training_history_us.db')
     
     def _init_user_history_db(self, username: str):
         """初始化用户历史记录数据库"""

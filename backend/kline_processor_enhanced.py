@@ -12,7 +12,7 @@ class KLineProcessorEnhanced:
         data_manager,
         stock_code: str,
         start_date: str,
-        source: str = "akshare",
+        source: str = "yfinance",
         interval: str = "daily",
     ):
         self.data_manager = data_manager
@@ -20,7 +20,9 @@ class KLineProcessorEnhanced:
         self.source = source
         self.interval = interval
         self.start_date = pd.to_datetime(start_date)
-        self.adjustment_mode = "forward"
+        # Yahoo's historical OHLC is already split-adjusted; avoid applying a
+        # dividend adjustment that would use information from after the replay date.
+        self.adjustment_mode = "none"
         self.factor_changed = False
 
         self.raw_data = data_manager.get_stock_data(stock_code, source=source, interval=interval)
@@ -79,14 +81,14 @@ class KLineProcessorEnhanced:
             raise ValueError(f"无效的复权模式: {mode}")
 
         for col in ["open", "high", "low", "close"]:
-            result[col] = (result[col] * result["adj_ratio"]).round(2)
+            result[col] = (result[col] * result["adj_ratio"]).round(4)
 
         keep_cols = [col for col in ["date", "open", "high", "low", "close", "volume", "amount"] if col in result.columns]
         return result[keep_cols].copy()
 
     def set_adjustment(self, mode: str):
-        if mode not in {"none", "forward", "backward", "dynamic_forward"}:
-            raise ValueError(f"无效的复权模式: {mode}")
+        if mode != "none":
+            raise ValueError("美股训练仅支持 Yahoo 拆股调整历史价格，复权模式必须为 none")
         self.adjustment_mode = mode
 
     def get_current_bar_id(self) -> int:

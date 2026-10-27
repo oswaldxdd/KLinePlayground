@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>A股K线复盘训练器</title>
+    <title>美股 K 线复盘训练器</title>
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="css/style_enhanced.css">
     <script src="js/lightweight-charts.standalone.production.js"></script>
@@ -42,8 +42,8 @@
         <div class="user-selection-container">
             <div class="hero-copy">
                 <span class="eyebrow">KLine Trainer</span>
-                <h1>A股 K 线复盘训练</h1>
-                <p>训练K线交易能力，支持日线、周线和AI复盘。</p>
+                <h1>美股 K 线复盘训练</h1>
+                <p>使用美元历史行情训练交易决策，支持日线、周线和 AI 复盘。</p>
             </div>
             <div class="version-badge">v3.2.0</div>
             <div class="user-list">
@@ -68,7 +68,7 @@
                 <button id="switch-user-btn" class="btn btn-secondary">切换用户</button>
             </div>
             <div class="toolbar-center">
-                <h1 id="main-title">A股 K 线复盘训练器</h1>
+                <h1 id="main-title">美股 K 线复盘训练器</h1>
                 <div id="current-bar-id" class="bar-id-display"></div>
             </div>
             <div class="toolbar-right">
@@ -84,28 +84,25 @@
                 <h2>交易与界面设置</h2>
                 <div class="form-grid">
                     <div class="form-group">
-                        <label>默认初始资金 (元)</label>
+                        <label>默认初始资金（美元）</label>
                         <input type="number" id="default-initial-capital" step="10000" min="1000">
                     </div>
                     <div class="form-group">
-                        <label>佣金费率 (万分之)</label>
+                        <label>模拟佣金率（万分之）</label>
                         <input type="number" id="commission-rate" step="0.1" min="0" max="100">
                     </div>
                     <div class="form-group">
-                        <label>最低佣金 (元)</label>
+                        <label>最低佣金（美元）</label>
                         <input type="number" id="min-commission" step="0.1" min="0">
                     </div>
                     <div class="form-group">
-                        <label>印花税率 (千分之)</label>
+                        <label>额外卖出费率（万分之）</label>
                         <input type="number" id="stamp-tax-rate" step="0.1" min="0" max="100">
                     </div>
                     <div class="form-group hidden">
                         <label>复权方式</label>
                         <select id="adjustment-mode">
-                            <option value="none">不复权</option>
-                            <option value="forward" selected>前复权</option>
-                            <option value="backward">后复权</option>
-                            <option value="dynamic_forward">动态前复权</option>
+                            <option value="none">Yahoo 拆股调整价格</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -185,7 +182,7 @@
                 <div id="specified-tab" class="tab-content active">
                     <div class="form-group">
                         <label>股票代码</label>
-                        <input type="text" id="stock-code" placeholder="例如: 000001">
+                        <input type="text" id="stock-code" placeholder="例如: AAPL 或 BRK-B">
                     </div>
                     <div class="form-group">
                         <label>起始日期</label>
@@ -197,10 +194,7 @@
                     <div class="form-group">
                         <label>板块筛选</label>
                         <select id="sector-filter">
-                            <option value="all">全部</option>
-                            <option value="main">主板</option>
-                            <option value="gem">创业板</option>
-                            <option value="sme">中小板</option>
+                        <option value="all">美股样例列表</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -217,9 +211,7 @@
                     <div class="form-group">
                         <label>数据源</label>
                         <select id="data-source">
-                            <option value="akshare" selected>AKShare（免费公网）</option>
-                            <option value="xtdata">xtdata / XTQuant（本地）</option>
-                            <option value="mootdx">mootdx（通达信协议）</option>
+                            <option value="yfinance" selected>Yahoo Finance（yfinance）</option>
                             <option value="offline">本地离线数据</option>
                         </select>
                     </div>
@@ -246,27 +238,23 @@
         <div id="data-sync-modal" class="modal hidden">
             <div class="modal-content">
                 <h2>增量补充离线数据</h2>
-                <p class="helper-text">用 AKShare、xtdata 或 mootdx 按日期区间补齐本地离线目录。系统会先检查本地已有时间范围，只增量补缺口。</p>
+                <p class="helper-text">从 Yahoo Finance 按日期区间补充美股离线行情，或直接使用本地离线数据。</p>
                 <div class="form-grid">
                     <div class="form-group">
                         <label>补数范围</label>
                         <select id="sync-scope">
                             <option value="single" selected>单只股票</option>
-                            <option value="sh">全沪市</option>
-                            <option value="sz">全深市</option>
-                            <option value="all">全市场</option>
+                            <option value="all">美股样例列表</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>股票代码</label>
-                        <input type="text" id="sync-stock-code" placeholder="例如: 000001">
+                        <input type="text" id="sync-stock-code" placeholder="例如: AAPL 或 BRK-B">
                     </div>
                     <div class="form-group">
                         <label>在线数据源</label>
                         <select id="sync-source">
-                            <option value="akshare" selected>AKShare</option>
-                            <option value="xtdata" hidden>xtdata / XTQuant</option>
-                            <option value="mootdx" hidden>mootdx</option>
+                            <option value="yfinance" selected>Yahoo Finance（yfinance）</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -301,10 +289,10 @@
                 <div class="control-section">
                     <h3>账户信息</h3>
                     <div class="account-info">
-                        <div class="info-item"><span>总资产</span><span id="total-assets">¥100,000</span></div>
-                        <div class="info-item"><span>可用资金</span><span id="available-cash">¥100,000</span></div>
-                        <div class="info-item"><span>持仓市值</span><span id="position-value">¥0</span></div>
-                        <div class="info-item"><span>浮动盈亏</span><span id="floating-pnl">¥0</span></div>
+                        <div class="info-item"><span>总资产</span><span id="total-assets">$100,000</span></div>
+                        <div class="info-item"><span>可用资金</span><span id="available-cash">$100,000</span></div>
+                        <div class="info-item"><span>持仓市值</span><span id="position-value">$0</span></div>
+                        <div class="info-item"><span>浮动盈亏</span><span id="floating-pnl">$0</span></div>
                     </div>
                 </div>
 
@@ -328,12 +316,9 @@
                     <h3>图表设置</h3>
                     <div class="settings-menu">
                         <div class="setting-group hidden">
-                            <label>复权设置</label>
+                            <label>价格显示</label>
                             <div class="adjustment-controls">
-                                <label><input type="radio" name="adjustment" value="none">不复权</label>
-                                <label><input type="radio" name="adjustment" value="forward" checked>前复权</label>
-                                <label><input type="radio" name="adjustment" value="backward">后复权</label>
-                                <label><input type="radio" name="adjustment" value="dynamic_forward">动态前复权</label>
+                                <label><input type="radio" name="adjustment" value="none" checked>Yahoo 拆股调整历史价格</label>
                             </div>
                         </div>
                         <div class="setting-group">
@@ -423,11 +408,11 @@
                     <h3>交易操作</h3>
                     <div class="trade-controls">
                         <div class="trade-input">
-                            <label>交易数量（手）</label>
+                            <label>交易数量（股）</label>
                             <input type="number" id="trade-quantity" value="1" min="1" max="1">
                             <div class="max-quantity-info">
-                                最大可买 <span id="max-buy-quantity">0</span> 手
-                                最大可卖 <span id="max-sell-quantity">0</span> 手
+                                最大可买 <span id="max-buy-quantity">0</span> 股
+                                最大可卖 <span id="max-sell-quantity">0</span> 股
                                 <span id="max-quantity" class="hidden">0</span>
                             </div>
                         </div>

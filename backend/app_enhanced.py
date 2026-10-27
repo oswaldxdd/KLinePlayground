@@ -35,7 +35,7 @@ if getattr(sys, 'frozen', False):
     project_root = os.path.join(os.path.dirname(sys.executable), '..')
 else:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-users_dir_path = os.path.join(project_root, 'users')
+users_dir_path = os.path.join(project_root, 'users_us')
 data_dir_path = os.path.join(project_root, 'data')
 
 # 初始化管理器
@@ -225,13 +225,14 @@ def analyze_report_with_ai(report):
         return "AI API Key 未配置，无法进行分析。"
     
     prompt = f"""
-请作为一位资深的股票交易教练，对以下A股K线训练的回放复盘报告进行分析、点评和评分（百分制）。
+请作为一位资深的美股交易教练，对以下美元计价的美股K线训练回放进行分析、点评和评分（百分制）。
 
 【训练基本信息】
 - 股票代码: {report.get('stock_code')}
 - 训练期间: {report.get('start_date')} 至 {report.get('end_date')}
 - 初始资金: {report.get('initial_capital')}
 - 最终资金: {report.get('final_capital')}
+- 计价币种: {report.get('currency', 'USD')}
 - 总收益率: {report.get('total_return')}%
 - 最大回撤: {report.get('max_drawdown', 0)}%
 - 总交易次数: {report.get('total_trades')}
@@ -240,7 +241,7 @@ def analyze_report_with_ai(report):
 【交易明细】
 """
     for t in report.get('trade_details', [])[:150]:
-        prompt += f"- {t.get('date')} {t.get('action')} {t.get('quantity')}手 @ {t.get('price')} (Bar: {t.get('bar_id')})\n"
+        prompt += f"- {t.get('date')} {t.get('action')} {t.get('quantity')}股 @ ${t.get('price')} (Bar: {t.get('bar_id')})\n"
         
     prompt += "\n请给出专业的点评（包括优点、不足和改进建议），并在最后给出一个综合评分（0-100分）。要求语言简练、直击要害。"
 
@@ -291,7 +292,7 @@ def start_training():
         data = request.get_json()
         user = data.get('user')
         mode = data.get('mode')
-        data_source = data.get('data_source', 'akshare')
+        data_source = data.get('data_source', 'yfinance')
         period = data.get('period', 'daily')
         initial_capital = data.get('initial_capital', 100000)
         
@@ -336,16 +337,18 @@ def start_training():
         
         # 创建增强版K线处理器和交易模拟器
         kline_processor = KLineProcessorEnhanced(data_manager, stock_code, start_date, source=data_source, interval=period)
-        trade_simulator = TradeSimulatorEnhanced(user, initial_capital, stock_code)
+        trade_simulator = TradeSimulatorEnhanced(user, initial_capital, stock_code, users_dir=users_dir_path)
+        initial_bar = kline_processor.get_current_bar()
+        trade_simulator.update_current_price(initial_bar['close'], initial_bar['bar_id'])
         
         # 获取用户设置并应用到交易模拟器
         user_config = user_manager.get_user_config(user)
         if user_config and 'settings' in user_config:
             settings = user_config['settings']
             trade_simulator.set_commission_settings(
-                settings.get('commission_rate', 0.0003),
-                settings.get('min_commission', 5.0),
-                settings.get('stamp_tax_rate', 0.001)
+                settings.get('commission_rate', 0.0),
+                settings.get('min_commission', 0.0),
+                settings.get('stamp_tax_rate', 0.0)
             )
         
         # 存储训练会话
@@ -415,7 +418,7 @@ def get_training_data(training_id):
             'trade_markers': kline_processor.get_trade_markers() if view_period == 'daily' else [],
             'period': training.get('period', 'daily'),
             'view_period': view_period,
-            'data_source': training.get('data_source', 'akshare')
+            'data_source': training.get('data_source', 'yfinance')
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -439,7 +442,8 @@ def next_bar(training_id):
             report = trade_simulator.generate_report(
                 training['stock_code'],
                 training['start_date'],
-                kline_processor.get_current_date()
+                kline_processor.get_current_date(),
+                stock_name=data_manager.get_stock_name(training['stock_code']),
             )
             
             # 保存训练记录
@@ -498,8 +502,12 @@ def update_adjustment(training_id):
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
         
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': '请求内容必须是 JSON 对象'}), 400
         adjustment = data.get('adjustment', 'none')
+        if adjustment != 'none':
+            return jsonify({'error': '美股训练仅支持 Yahoo 拆股调整历史价格，复权模式必须为 none'}), 400
         view_period = request.args.get('view_period', 'daily')
         
         training = active_trainings[training_id]
@@ -574,7 +582,7 @@ def get_full_data(training_id):
             'trade_markers': kline_processor.get_trade_markers() if view_period == 'daily' else [],
             'period': training.get('period', 'daily'),
             'view_period': view_period,
-            'data_source': training.get('data_source', 'akshare')
+            'data_source': training.get('data_source', 'yfinance')
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -591,8 +599,10 @@ def execute_trade(training_id):
         quantity = data.get('quantity')
         price_type = data.get('price_type', 'close')
         
-        if not action or not quantity:
+        if not action or quantity is None:
             return jsonify({'error': '交易参数不完整'}), 400
+        if type(quantity) is not int or quantity <= 0:
+            return jsonify({'error': '交易数量必须为正整数股数'}), 400
         
         training = active_trainings[training_id]
         trade_simulator = training['trade_simulator']
@@ -602,6 +612,7 @@ def execute_trade(training_id):
         current_bar = kline_processor.get_current_bar()
         current_price = current_bar['open'] if price_type == 'open' else current_bar['close']
         current_date = kline_processor.get_current_date()
+        trade_simulator.update_current_price(current_bar['close'], current_bar['bar_id'])
         
         # 执行交易
         if action == 'buy':
@@ -718,7 +729,8 @@ def end_training(training_id):
         report = trade_simulator.generate_report(
             training['stock_code'],
             training['start_date'],
-            kline_processor.get_current_date()
+            kline_processor.get_current_date(),
+            stock_name=data_manager.get_stock_name(training['stock_code']),
         )
         
         # 保存训练记录
@@ -849,13 +861,15 @@ def sync_offline_data():
     try:
         data = request.get_json() or {}
         stock_code = (data.get('stock_code') or '').strip()
-        source = data.get('source', 'akshare')
+        source = data.get('source', 'yfinance')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         force_full = bool(data.get('force_full', False))
 
         if not stock_code:
             return jsonify({'error': '股票代码不能为空'}), 400
+        if not data_manager._normalize_stock_code(stock_code):
+            return jsonify({'error': '请输入有效的美股代码，例如 AAPL 或 BRK-B'}), 400
         if source == 'offline':
             return jsonify({'error': '请先选择在线数据源'}), 400
 
@@ -901,8 +915,8 @@ def health_check():
 
 if __name__ == '__main__':
     # 确保数据目录存在
-    os.makedirs('../data', exist_ok=True)
-    os.makedirs('../users', exist_ok=True)
+    os.makedirs(data_dir_path, exist_ok=True)
+    os.makedirs(users_dir_path, exist_ok=True)
     
     # 启动Flask应用
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='127.0.0.1', port=5000, debug=False)

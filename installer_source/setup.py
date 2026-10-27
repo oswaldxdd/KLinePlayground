@@ -170,7 +170,7 @@ def main_install():
         app_root_path = os.path.join(install_path, APP_NAME)
         bin_path = os.path.join(app_root_path, "bin")
         data_path = os.path.join(app_root_path, "data")
-        user_path = os.path.join(app_root_path, "users")
+        user_path = os.path.join(app_root_path, "users_us")
 
         # 创建目录
         os.makedirs(bin_path, exist_ok=True)

@@ -39,8 +39,6 @@ copy "dist\KLineTrainer.exe" ".\installer_source\app_files\"
 copy "dist\AI_Tester_Release\KLineTrainer_AI_Assistant.exe" ".\installer_source\app_files\"
 del ".\dist\KLineTrainer.exe"
 mkdir ".\installer_source\data" 2>nul
-copy "data\stock_list.csv" ".\installer_source\data\"
-copy "data\stock_names.json" ".\installer_source\data\"
 echo Done. Copy done.
 echo.
 

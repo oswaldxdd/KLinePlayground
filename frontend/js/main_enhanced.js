@@ -1059,10 +1059,10 @@ function resetToMainAppState() {
     // 清理持仓信息
     document.getElementById('current-positions').innerHTML = '<div class="no-positions">暂无持仓</div>';
     // 清理账户信息
-    document.getElementById('total-assets').textContent = '¥-';
-    document.getElementById('available-cash').textContent = '¥-';
-    document.getElementById('position-value').textContent = '¥-';
-    document.getElementById('floating-pnl').textContent = '¥-';
+    document.getElementById('total-assets').textContent = '$-';
+    document.getElementById('available-cash').textContent = '$-';
+    document.getElementById('position-value').textContent = '$-';
+    document.getElementById('floating-pnl').textContent = '$-';
     document.getElementById('floating-pnl').style.color = '#000000';
     
     // reset shift toggle
@@ -1075,7 +1075,7 @@ function resetToMainAppState() {
     // 清理K线信息
     document.getElementById('stock-name').textContent = '未知股票';
     document.getElementById('current-date').textContent = 'YYYY/MM/DD';
-    document.getElementById('current-price').textContent = '¥-.--';
+    document.getElementById('current-price').textContent = '$-.--';
     document.getElementById('current-bar-id').textContent = 'Bar ID: N/A';
     document.getElementById('training-progress').textContent = '进度: -';
 
@@ -1136,7 +1136,7 @@ async function showTrainingSetup(returnScreen = null) {
         try {
             const response = await fetch(`${API_BASE}/users/${currentUser}/settings`);
             const settings = await response.json();
-            // 应用默认初始资金，如果不存在则使用100000
+            // Apply the user's default USD training balance.
             document.getElementById('initial-capital').value = settings.default_initial_capital || 100000;
         } catch (error) {
             console.error('加载用户默认资金失败:', error);
@@ -1180,7 +1180,7 @@ function showDataSyncModal() {
         endInput.value = new Date().toISOString().split('T')[0];
     }
     if (sourceSelect && !sourceSelect.value) {
-        sourceSelect.value = 'akshare';
+        sourceSelect.value = 'yfinance';
     }
     if (forceFull) forceFull.checked = false;
     if (scopeSelect && !scopeSelect.value) {
@@ -1230,15 +1230,11 @@ function updateSyncProgress(completed, total, label = '') {
 }
 
 function getSyncThrottleMs(source) {
-    if (source === 'xtdata') return 40;
-    if (source === 'mootdx') return 240;
     return 260;
 }
 
 function getSyncScopeLabel(scope) {
-    if (scope === 'sh') return '全沪市';
-    if (scope === 'sz') return '全深市';
-    if (scope === 'all') return '全市场';
+    if (scope === 'all') return '美股样例列表';
     return '单只股票';
 }
 
@@ -1279,7 +1275,7 @@ async function syncSingleStock(stockCode, source, startDate, endDate, forceFull)
 async function syncOfflineData() {
     const scope = document.getElementById('sync-scope')?.value || 'single';
     const stockCode = document.getElementById('sync-stock-code')?.value.trim();
-    const source = document.getElementById('sync-source')?.value || 'akshare';
+    const source = document.getElementById('sync-source')?.value || 'yfinance';
     const startDate = document.getElementById('sync-start-date')?.value || '';
     const endDate = document.getElementById('sync-end-date')?.value || '';
     const forceFull = !!document.getElementById('sync-force-full')?.checked;
@@ -1449,10 +1445,10 @@ async function loadUserSettings() {
         document.getElementById('default-initial-capital').value = settings.default_initial_capital || 100000;
         document.getElementById('commission-rate').value = (settings.commission_rate * 10000).toFixed(1);
         document.getElementById('min-commission').value = settings.min_commission;
-        document.getElementById('stamp-tax-rate').value = (settings.stamp_tax_rate * 1000).toFixed(1);
+        document.getElementById('stamp-tax-rate').value = (settings.stamp_tax_rate * 10000).toFixed(1);
         document.getElementById('theme-select').value = settings.theme || currentTheme;
-        document.getElementById('adjustment-mode').value = 'forward';
-        const adjustmentRadio = document.querySelector('input[name="adjustment"][value="forward"]');
+        document.getElementById('adjustment-mode').value = 'none';
+        const adjustmentRadio = document.querySelector('input[name="adjustment"][value="none"]');
         if (adjustmentRadio) {
             adjustmentRadio.checked = true;
         }
@@ -1528,8 +1524,8 @@ async function saveSettings() {
             default_initial_capital: parseInt(document.getElementById('default-initial-capital').value, 10),
             commission_rate: parseFloat(document.getElementById('commission-rate').value) / 10000,
             min_commission: parseFloat(document.getElementById('min-commission').value),
-            stamp_tax_rate: parseFloat(document.getElementById('stamp-tax-rate').value) / 1000,
-            adjustment_mode: 'forward',
+            stamp_tax_rate: parseFloat(document.getElementById('stamp-tax-rate').value) / 10000,
+            adjustment_mode: 'none',
             theme: document.getElementById('theme-select').value,
             enable_ai_api: document.getElementById('enable-ai-api').checked,
             ma_periods: maPeriods,
@@ -1545,7 +1541,7 @@ async function saveSettings() {
         });
 
         if (response.ok) {
-            const adjustmentRadio = document.querySelector('input[name="adjustment"][value="forward"]');
+            const adjustmentRadio = document.querySelector('input[name="adjustment"][value="none"]');
             if (adjustmentRadio) {
                 adjustmentRadio.checked = true;
             }
@@ -1694,7 +1690,7 @@ async function switchViewPeriod(period) {
 async function startTraining() {
     const isRandomMode = document.querySelector('.tab-btn.active').dataset.tab === 'random';
     const initialCapital = parseFloat(document.getElementById('initial-capital').value);
-    const dataSource = document.getElementById('data-source').value || 'akshare';
+    const dataSource = document.getElementById('data-source').value || 'yfinance';
     const period = 'daily';
 
     let trainingConfig = {
@@ -2297,16 +2293,16 @@ function updateCurrentInfo(barData, progress) {
     const date = new Date(barData.time * 1000);
     const formattedDate = `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
     document.getElementById('current-date').textContent = formattedDate;
-    document.getElementById('current-price').textContent = `¥${barData.close.toFixed(2)}`;
+    document.getElementById('current-price').textContent = `$${barData.close.toFixed(2)}`;
 
     // 显示当前bar ID
     document.getElementById('current-bar-id').textContent = `Bar ID: ${barData.bar_id || 'N/A'}`;
 
     // 更新当日详情
-    document.getElementById('open-price').textContent = `¥${barData.open.toFixed(2)}`;
-    document.getElementById('high-price').textContent = `¥${barData.high.toFixed(2)}`;
-    document.getElementById('low-price').textContent = `¥${barData.low.toFixed(2)}`;
-    document.getElementById('close-price').textContent = `¥${barData.close.toFixed(2)}`;
+    document.getElementById('open-price').textContent = `$${barData.open.toFixed(2)}`;
+    document.getElementById('high-price').textContent = `$${barData.high.toFixed(2)}`;
+    document.getElementById('low-price').textContent = `$${barData.low.toFixed(2)}`;
+    document.getElementById('close-price').textContent = `$${barData.close.toFixed(2)}`;
 
     // 更新成交量
     if (barData.volume !== undefined) {
@@ -2727,7 +2723,7 @@ function changeIndicator() {
 // 复权设置
 async function updateAdjustment(targetRange = null) {
     const checkedAdjustment = document.querySelector('input[name="adjustment"]:checked');
-    const adjustment = checkedAdjustment ? checkedAdjustment.value : 'forward';
+    const adjustment = checkedAdjustment ? checkedAdjustment.value : 'none';
 
     const maQuery = maPeriods.join(',');
     try {
@@ -2867,16 +2863,16 @@ async function updateAccountInfo() {
         const response = await fetch(`${API_BASE}/training/${currentTraining.id}/account`);
         const account = await response.json();
 
-        document.getElementById('total-assets').textContent = `¥${account.total_assets.toLocaleString()}`;
-        document.getElementById('available-cash').textContent = `¥${account.available_cash.toLocaleString()}`;
-        document.getElementById('position-value').textContent = `¥${account.position_value.toLocaleString()}`;
-        document.getElementById('floating-pnl').textContent = `¥${account.floating_pnl.toLocaleString()}`;
+        document.getElementById('total-assets').textContent = `$${account.total_assets.toLocaleString()}`;
+        document.getElementById('available-cash').textContent = `$${account.available_cash.toLocaleString()}`;
+        document.getElementById('position-value').textContent = `$${account.position_value.toLocaleString()}`;
+        document.getElementById('floating-pnl').textContent = `$${account.floating_pnl.toLocaleString()}`;
         document.getElementById('floating-pnl').style.color = account.floating_pnl > 0 ? '#ff4d4f' : account.floating_pnl < 0 ? '#008000' : '#000000';
 
         // 更新最大可交易数量
         document.getElementById('max-buy-quantity').textContent = account.max_buyable_quantity;
         if (account.position_summary) {
-            let max_sell_qty = account.position_summary.available_shares / 100
+        let max_sell_qty = account.position_summary.available_shares
             document.getElementById('max-sell-quantity').textContent = max_sell_qty;
             document.getElementById('trade-quantity').max = Math.max(account.max_buyable_quantity, max_sell_qty);
         }
@@ -2923,9 +2919,9 @@ async function updateTradeHistory() {
                 </div>
                 <div class="trade-details">
                     <div>Bar ID: ${trade.bar_id}</div>
-                    <div>数量: ${trade.quantity} 手</div>
-                    <div>价格: ¥${trade.price.toFixed(2)}</div>
-                    <div>金额: ¥${trade.net_amount.toFixed(2)}</div>
+                    <div>数量: ${trade.quantity} 股</div>
+                    <div>价格: $${trade.price.toFixed(2)}</div>
+                    <div>金额: $${trade.net_amount.toFixed(2)}</div>
                 </div>
             `;
             container.appendChild(tradeItem);
@@ -2992,21 +2988,21 @@ function updatePositionInfo(positionSummary) {
 
     container.innerHTML = `
         <div class="position-summary">
-            <div class="position-item">
+        <div class="position-item">
                 <span>总持股:</span>
-                <span>${(positionSummary.total_shares / 100).toFixed(2).toLocaleString()} 手</span>
+                <span>${positionSummary.total_shares.toLocaleString()} 股</span>
             </div>
             <div class="position-item">
                 <span>可卖:</span>
-                <span>${(positionSummary.available_shares / 100).toFixed(2).toLocaleString()} 手</span>
+                <span>${positionSummary.available_shares.toLocaleString()} 股</span>
             </div>
             <div class="position-item">
                 <span>成本价:</span>
-                <span>¥${positionSummary.average_cost.toFixed(2)}</span>
+                <span>$${positionSummary.average_cost.toFixed(2)}</span>
             </div>
             <div class="position-item">
                 <span>现价:</span>
-                <span>¥${positionSummary.current_price.toFixed(2)}</span>
+                <span>$${positionSummary.current_price.toFixed(2)}</span>
             </div>
             <div class="position-item">
                 <span>盈亏:</span>
@@ -3026,7 +3022,7 @@ function addTradeRecord(trade) {
 /**
  * 强制平仓函数
  * 会持续尝试卖出所有持仓，直到持仓清空。
- * 如果当天有T+1限制，会自动进入下一天再尝试。
+ * 美股模拟按同一交易日可卖处理；若账户状态不一致则停止并提示。
  * @returns {Promise<boolean>} - 返回一个Promise，成功清仓则resolve(true)，否则resolve(false)。
  */
 async function forceLiquidatePosition() {
@@ -3058,7 +3054,7 @@ async function forceLiquidatePosition() {
             // 3. 如果有可卖的股票，就卖掉它们
             if (availableShares > 0) {
                 console.log(`检测到可卖持仓 ${availableShares} 股，正在执行卖出...`);
-                const sellQuantity = Math.floor(availableShares / 100); // 转换为“手”
+                const sellQuantity = availableShares;
 
                 const sellResponse = await fetch(`${API_BASE}/training/${currentTraining.id}/trade`, {
                     method: 'POST',
@@ -3076,7 +3072,7 @@ async function forceLiquidatePosition() {
                 updateAccountInfo();
                 addTradeRecord(result.trade);
                 updateTradeMarkers(result.trade_markers);
-                console.log(`成功卖出 ${sellQuantity} 手。`);
+                console.log(`成功卖出 ${sellQuantity} 股。`);
 
                 // 卖出后再次检查，如果已经全部卖完，直接成功返回
                 if (account.position_summary.total_shares - availableShares === 0) {
@@ -3085,12 +3081,10 @@ async function forceLiquidatePosition() {
                 }
             }
 
-            // 4. 如果还有持仓但当天不可卖，则进入下一天
-            console.log("当天有T+1限制或已无更多可卖股票，进入下一个交易日...");
-            await nextBar(); // 调用 nextBar 进入下一天
-
-            // 增加一个小的延时，等待UI和后端状态更新
-            await new Promise(resolve => setTimeout(resolve, 100));
+            // 美股模拟为 T+0。持仓存在但可卖数量为零说明账户状态不一致。
+            console.error("仍有持仓但没有可卖股数，停止自动平仓。");
+            alert('强制平仓失败：仍有持仓但当前没有可卖股数。');
+            return false;
 
         } catch (error) {
             console.error('强制平仓过程中发生错误:', error);
@@ -3191,8 +3185,8 @@ function updateReportSummary(parentElement, report) {
     const summaryItems = new Map([
         ['股票代码:', report.stock_code],
         ['训练期间:', `${report.start_date} 至 ${report.end_date}`],
-        ['初始资金:', `¥${report.initial_capital.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`],
-        ['最终资产:', `¥${report.final_capital.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`],
+        ['初始资金:', `$${report.initial_capital.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`],
+        ['最终资产:', `$${report.final_capital.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`],
         ['总交易次数:', `${report.total_trades} 次`],
         ['交易胜率:', `${(report.trade_win_rate || 0).toFixed(2)}%`]
     ]);
@@ -3241,7 +3235,7 @@ function createTradeDetailsTable(parentElement, tradeDetails) {
                         <th>价格</th>
                         <th>数量</th>
                         <th>金额</th>
-                        <th>税费</th>
+                        <th>佣金及其他费用</th>
                         <th>净金额</th>
                     </tr>
                 </thead>
@@ -3274,11 +3268,11 @@ function createTradeDetailsTable(parentElement, tradeDetails) {
             <td>${trade.bar_id}</td>
             <td>${trade.date}</td>
             <td class="${trade.action}">${isBuy ? '买入' : '卖出'}</td>
-            <td>¥${trade.price.toFixed(2)}</td>
+            <td>$${trade.price.toFixed(2)}</td>
             <td>${trade.quantity}</td>
-            <td>${isBuy ? '-' : ''}¥${trade.amount.toFixed(2)}</td>
-            <td>-¥${totalFee.toFixed(2)}</td>
-            <td>${profit >= 0 ? '¥' : '-¥'}${Math.abs(profit).toFixed(2)}</td>
+            <td>${isBuy ? '-' : ''}$${trade.amount.toFixed(2)}</td>
+            <td>-$${totalFee.toFixed(2)}</td>
+            <td>${profit >= 0 ? '$' : '-$'}${Math.abs(profit).toFixed(2)}</td>
         `;
 
         // 累加合计值
@@ -3297,9 +3291,9 @@ function createTradeDetailsTable(parentElement, tradeDetails) {
     totalRow.className = 'total-row'; // 添加样式类以便高亮
     totalRow.innerHTML = `
         <td colspan="5"><strong>合计</strong></td>
-        <td><strong>¥${totals.totalAmount.toFixed(2)}</strong></td>
-        <td><strong>-¥${totals.totalCommission.toFixed(2)}</strong></td>
-        <td><strong>${totals.totalProfit >= 0 ? '¥' : '-¥'}${Math.abs(totals.totalProfit).toFixed(2)}</strong></td>
+        <td><strong>$${totals.totalAmount.toFixed(2)}</strong></td>
+        <td><strong>-$${totals.totalCommission.toFixed(2)}</strong></td>
+        <td><strong>${totals.totalProfit >= 0 ? '$' : '-$'}${Math.abs(totals.totalProfit).toFixed(2)}</strong></td>
     `;
 }
 
@@ -3492,7 +3486,7 @@ function formatNumber(num) {
 }
 
 function formatCurrency(num) {
-    return `¥${num.toLocaleString()}`;
+    return `$${num.toLocaleString()}`;
 }
 
 function formatPercent(num) {

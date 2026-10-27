@@ -1,12 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+yfinance_datas, yfinance_binaries, yfinance_hiddenimports = collect_all('yfinance')
 
 
 a = Analysis(
     ['webview_app\\main_pywebview.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=yfinance_binaries,
+    datas=[('frontend', 'frontend'), *yfinance_datas],
+    hiddenimports=yfinance_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -1,25 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-import os
+from PyInstaller.utils.hooks import collect_all
 
-# Dynamically find akshare path
-try:
-    import akshare
-    akshare_path = os.path.dirname(akshare.__file__)
-except ImportError:
-    # Fallback if strictly running without akshare installed in sys.path
-    akshare_path = os.path.join('.venv', 'Lib', 'site-packages', 'akshare')
+yfinance_datas, yfinance_binaries, yfinance_hiddenimports = collect_all('yfinance')
 
 block_cipher = None
 
 a = Analysis(
     ['webview_app/main_pywebview.py'],
     pathex=['.'],
-    binaries=[],
-    datas=[
-        ('frontend', 'frontend'),
-        (akshare_path, 'akshare'),
-    ],
-    hiddenimports=[],
+    binaries=yfinance_binaries,
+    datas=[('frontend', 'frontend'), *yfinance_datas],
+    hiddenimports=yfinance_hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
