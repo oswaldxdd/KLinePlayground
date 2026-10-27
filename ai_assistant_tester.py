@@ -2,6 +2,7 @@ import argparse
 import base64
 import json
 import os
+import logging
 import socket
 import sys
 import threading
@@ -11,9 +12,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-import requests
-import webview
-from flask import Flask, jsonify, request
+APP_VERSION = "v3.3.0-us.2"
 
 CONFIG_FILE_NAME = ".ai_tester_config.enc"
 CRYPT_KEY = "kline_trainer_secret_key"
@@ -38,6 +37,25 @@ def get_project_root() -> Path:
             return base_dir.parent
         return base_dir
     return base_dir
+
+
+bundle_root = Path(__file__).resolve().parent
+if str(bundle_root) not in sys.path:
+    sys.path.insert(0, str(bundle_root))
+from backend.startup_diagnostics import configure_startup_diagnostics, report_startup_failure
+
+configure_startup_diagnostics("KLineTrainer_AI_Assistant", APP_VERSION, get_project_root())
+try:
+    import requests
+    import webview
+    from flask import Flask, jsonify, request
+except Exception as startup_error:
+    report_startup_failure(
+        f"无法加载 AI 助手桌面组件：{type(startup_error).__name__}: {startup_error}",
+        "美股训练 AI 助手启动失败",
+        startup_error,
+    )
+    raise
 
 
 def get_bundle_base() -> Path:
@@ -401,7 +419,7 @@ class AITesterWebviewApp:
 
         icon_path = get_bundle_base() / "ai_assistant.ico"
         window = webview.create_window(
-            title="美股训练 AI 助手 v3.3.0-us.1",
+            title=f"美股训练 AI 助手 {APP_VERSION}",
             url=f"http://127.0.0.1:{self.port}/",
             width=1380,
             height=920,
@@ -435,8 +453,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="美股训练 AI 助手")
     parser.add_argument("--smoke", action="store_true", help="无界面检查前端资源和 Flask 健康接口")
     options, _ = parser.parse_known_args()
-    tester_app = AITesterWebviewApp()
-    if options.smoke:
-        tester_app.run_smoke_test()
-    else:
-        tester_app.run()
+    try:
+        tester_app = AITesterWebviewApp()
+        if options.smoke:
+            tester_app.run_smoke_test()
+        else:
+            tester_app.run()
+    except SystemExit as startup_error:
+        if startup_error.code not in (None, 0):
+            report_startup_failure(
+                f"程序异常退出（代码 {startup_error.code}）。",
+                "美股训练 AI 助手启动失败",
+            )
+        raise
+    except Exception as startup_error:
+        report_startup_failure(
+            f"{type(startup_error).__name__}: {startup_error}",
+            "美股训练 AI 助手启动失败",
+            startup_error,
+        )
+        raise

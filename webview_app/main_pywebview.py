@@ -1,6 +1,7 @@
 """美股 K 线复盘训练 PyWebView 桌面版入口。"""
 
 import argparse
+import logging
 import os
 import sys
 import threading
@@ -9,18 +10,53 @@ import socket
 import tempfile
 import urllib.request
 import urllib.error
-import webview
 from pathlib import Path
 from unittest.mock import patch
 
 
-# 添加项目根目录到Python路径，以便能够导入同级的 backend 模块
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_VERSION = "v3.3.0-us.2"
+
+
+def get_project_root():
+    """Locate portable data folders for source, onedir, and onefile launches."""
+    if getattr(sys, 'frozen', False):
+        executable_dir = Path(sys.executable).resolve().parent
+        if executable_dir.name.lower() == 'bin':
+            return executable_dir.parent
+        if executable_dir.parent.name.lower() == 'bin':
+            return executable_dir.parent.parent
+        return executable_dir
+    return Path(__file__).resolve().parent.parent
+
+
+project_root = str(Path(__file__).resolve().parent.parent)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from backend.startup_diagnostics import configure_startup_diagnostics, report_startup_failure
+
+configure_startup_diagnostics('KLineTrainer_US', APP_VERSION, get_project_root())
+
+try:
+    import webview
+except Exception as startup_error:
+    report_startup_failure(
+        f'无法加载桌面窗口组件：{type(startup_error).__name__}: {startup_error}',
+        '美股 K 线复盘训练器启动失败',
+        startup_error,
+    )
+    raise
+
 # 导入后端应用
-from backend import app_enhanced as backend_app
+try:
+    from backend import app_enhanced as backend_app
+except Exception as startup_error:
+    report_startup_failure(
+        f'无法加载训练服务：{type(startup_error).__name__}: {startup_error}',
+        '美股 K 线复盘训练器启动失败',
+        startup_error,
+    )
+    raise
 
 app = backend_app.app
 app_project_root = backend_app.project_root
@@ -29,6 +65,7 @@ class KLineTrainerApp:
     def __init__(self):
         self.flask_app = app
         self.server = None
+        self.server_error = None
         self.port = self.find_free_port()
         
     def find_free_port(self):
@@ -50,7 +87,8 @@ class KLineTrainerApp:
             # 启动Flask应用
             self.flask_app.run(host='127.0.0.1', port=self.port, debug=False, use_reloader=False)
         except Exception as e:
-            print(f"Flask服务器启动失败: {e}")
+            self.server_error = e
+            logging.exception("Flask server failed to start")
     
     def get_frontend_url(self):
         """获取前端URL"""
@@ -79,10 +117,7 @@ class KLineTrainerApp:
                 missing_packages.append(package)
         
         if missing_packages:
-            print(f"缺少依赖包: {', '.join(missing_packages)}")
-            print("请运行以下命令安装依赖:")
-            print(f"pip install {' '.join(missing_packages)}")
-            return False
+            raise RuntimeError(f"缺少依赖包: {', '.join(missing_packages)}")
         
         return True
 
@@ -178,7 +213,7 @@ def main():
     """主函数"""
     print()
     print("=" * 60)
-    print("美股K线复盘训练 - 桌面版 v3.3.0-us.1")
+    print(f"美股K线复盘训练 - 桌面版 {APP_VERSION}")
     print("=" * 60)
     print()
     
@@ -203,6 +238,8 @@ def main():
     health_url = f"http://127.0.0.1:{app_instance.port}/api/health"
     
     for _ in range(max_retries):
+        if app_instance.server_error is not None:
+            raise RuntimeError(f"后端服务启动失败：{type(app_instance.server_error).__name__}: {app_instance.server_error}") from app_instance.server_error
         try:
             response = urllib.request.urlopen(health_url, timeout=1)
             if response.status == 200:
@@ -213,8 +250,7 @@ def main():
         time.sleep(0.5)
         
     if not is_ready:
-        print(f"错误: 后端服务启动超时，无法在端口 {app_instance.port} 访问。")
-        sys.exit(1)
+        raise RuntimeError(f"后端服务启动超时，无法在端口 {app_instance.port} 访问。")
         
     print("服务已就绪！")
     
@@ -224,7 +260,7 @@ def main():
     try:
         # 创建窗口
         window = webview.create_window(
-            title='美股K线复盘训练 - 桌面版 v3.3.0-us.1',
+            title=f'美股K线复盘训练 - 桌面版 {APP_VERSION}',
             url=f"http://127.0.0.1:{app_instance.port}/",
             width=1400,
             height=900,
@@ -246,9 +282,8 @@ def main():
         webview.start(debug=False)
         
     except Exception as e:
-        print(f"启动桌面应用失败: {e}")
-        print("请确保已正确安装PyWebView及其依赖")
-        sys.exit(1)
+        logging.exception("PyWebView window startup failed")
+        raise RuntimeError(f"桌面窗口启动失败：{type(e).__name__}: {e}") from e
     
     print("\n程序已退出")
 
@@ -256,8 +291,23 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='美股 K 线复盘训练器')
     parser.add_argument('--smoke', action='store_true', help='无界面运行离线启动和 Flask API 检查')
     options, _ = parser.parse_known_args()
-    if options.smoke:
-        run_packaged_smoke_test()
-    else:
-        main()
+    try:
+        if options.smoke:
+            run_packaged_smoke_test()
+        else:
+            main()
+    except SystemExit as startup_error:
+        if startup_error.code not in (None, 0):
+            report_startup_failure(
+                f'程序异常退出（代码 {startup_error.code}）。',
+                '美股 K 线复盘训练器启动失败',
+            )
+        raise
+    except Exception as startup_error:
+        report_startup_failure(
+            f'{type(startup_error).__name__}: {startup_error}',
+            '美股 K 线复盘训练器启动失败',
+            startup_error,
+        )
+        raise
 

@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 3, 0, 1),
-    prodvers=(3, 3, 0, 1),
+    filevers=(3, 3, 0, 2),
+    prodvers=(3, 3, 0, 2),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -14,11 +14,11 @@ VSVersionInfo(
       StringTable('040904B0', [
         StringStruct('CompanyName', 'KLinePlayground Contributors'),
         StringStruct('FileDescription', 'US Market K-Line Trainer'),
-        StringStruct('FileVersion', '3.3.0.1'),
+        StringStruct('FileVersion', '3.3.0.2'),
         StringStruct('InternalName', 'KLineTrainer_US'),
         StringStruct('OriginalFilename', 'KLineTrainer_US.exe'),
         StringStruct('ProductName', 'KLinePlayground US K-Line Trainer'),
-        StringStruct('ProductVersion', '3.3.0-us.1'),
+        StringStruct('ProductVersion', '3.3.0-us.2'),
         StringStruct('LegalCopyright', 'MIT License')
       ])
     ]),

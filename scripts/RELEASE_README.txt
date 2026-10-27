@@ -1,11 +1,14 @@
-美股 K 线复盘训练器 v3.3.0-us.1（Windows x64）
+美股 K 线复盘训练器 v3.3.0-us.2（Windows x64）
 
 【启动】
-双击“启动美股训练器.cmd”。也可运行 bin\KLineTrainer_US\KLineTrainer_US.exe。
-如果包内存在 bin\KLineTrainer_AI_Assistant\KLineTrainer_AI_Assistant.exe，可双击“启动AI助手.cmd”运行独立助手。
+双击“启动美股训练器.cmd”。也可运行 bin\KLineTrainer_US.exe。
+双击“启动AI助手.cmd”运行独立助手（bin\KLineTrainer_AI_Assistant.exe）。
 
 【运行要求】
-需要 Windows x64 和 Microsoft Edge WebView2 Runtime。程序使用系统 WebView2，不包含浏览器运行时；不需要另装 Python。
+需要 Windows x64 和 Microsoft Edge WebView2 Runtime。程序使用系统 WebView2，不包含浏览器运行时；不需要另装 Python。主程序和 AI 助手各为一个独立 EXE；窗口内运行所需的 Python.NET 与 WebView2 支持组件嵌入 EXE，Windows 解压 ZIP 时附加的来源标记不会阻止这些内部组件加载。Windows 对下载 EXE 本身的 SmartScreen、Defender 和组织策略检查仍然生效，请按系统提示核验发布来源；不要关闭或降低 Windows 安全设置。
+
+【启动诊断】
+启动日志默认写入 data\logs\KLineTrainer_US-startup.log 或 data\logs\KLineTrainer_AI_Assistant-startup.log。若数据目录不可写，日志改写到 %LOCALAPPDATA%\KLinePlayground-US\logs。启动失败时会显示错误摘要和日志位置。
 首次启动需要联网下载 Yahoo Finance 历史日线。Yahoo 覆盖、限流和网络状态可能导致请求失败。
 
 【数据位置】
