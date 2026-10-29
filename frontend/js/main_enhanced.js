@@ -2331,7 +2331,7 @@ function updateCurrentInfo(barData, progress) {
     document.getElementById('current-price').textContent = `$${barData.close.toFixed(2)}`;
 
     // 显示当前bar ID
-    document.getElementById('current-bar-id').textContent = `Bar ID: ${barData.bar_id || 'N/A'}`;
+    document.getElementById('current-bar-id').textContent = `Bar ID: ${progress?.current_bar_id ?? barData.bar_id ?? 'N/A'}`;
 
     // 更新当日详情
     document.getElementById('open-price').textContent = `$${barData.open.toFixed(2)}`;
