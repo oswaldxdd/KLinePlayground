@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-APP_VERSION = "v3.3.0-us.2"
+APP_VERSION = "v3.3.0-us.3"
 
 
 def get_project_root():
@@ -197,6 +197,41 @@ def run_packaged_smoke_test():
                 ended = client.post(f'/api/training/{training_id}/end')
                 assert ended.status_code == 200, ended.get_json()
                 checks.append('whole-share same-day buy/sell and report API')
+
+                # Verify the packaged timezone data and hourly replay path with
+                # controlled cached bars; packaging checks never require Yahoo.
+                import pandas as pd
+                smoke_day = pd.Timestamp.now(tz='America/New_York').tz_localize(None).normalize() - pd.Timedelta(days=14)
+                while smoke_day.weekday() >= 5:
+                    smoke_day -= pd.Timedelta(days=1)
+                hourly_rows = pd.DataFrame({
+                    'date': [smoke_day + pd.Timedelta(hours=9, minutes=30),
+                             smoke_day + pd.Timedelta(hours=10, minutes=30),
+                             smoke_day + pd.Timedelta(hours=11, minutes=30)],
+                    'open': [100, 101, 102], 'high': [102, 103, 104],
+                    'low': [99, 100, 101], 'close': [101, 102, 103],
+                    'volume': [1000, 1100, 1200],
+                })
+                manager._save_hourly_kline('AAPL', hourly_rows)
+                manager._refreshed_hourly_symbols.add('AAPL')
+                started = client.post('/api/training/start', json={
+                    'user': 'package-smoke', 'mode': 'specified', 'stock_code': 'AAPL',
+                    'start_date': smoke_day.strftime('%Y-%m-%d'), 'period': 'hourly',
+                    'data_source': 'yfinance', 'initial_capital': 1000,
+                })
+                assert started.status_code == 200, started.get_json()
+                hourly_id = started.get_json()['id']
+                initial = client.get(f'/api/training/{hourly_id}/data?view_period=hourly').get_json()
+                assert len(initial['kline_data']) == 1, initial
+                advanced = client.post(f'/api/training/{hourly_id}/next')
+                assert advanced.status_code == 200, advanced.get_json()
+                visible = client.get(f'/api/training/{hourly_id}/data?view_period=hourly').get_json()
+                assert len(visible['kline_data']) == 2, visible
+                assert visible['kline_data'][1]['time'] - visible['kline_data'][0]['time'] == 3600
+                daily_view = client.get(f'/api/training/{hourly_id}/data?view_period=daily').get_json()
+                assert len(daily_view['kline_data']) == 1
+                assert daily_view['kline_data'][0]['close'] == 102
+                checks.append('hourly cached replay, timezone and visible-only daily aggregation')
 
         message = 'PASS: ' + '; '.join(checks)
         smoke_log.write_text(message + '\n', encoding='utf-8')

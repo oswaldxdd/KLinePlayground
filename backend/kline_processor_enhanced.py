@@ -51,6 +51,16 @@ class KLineProcessorEnhanced:
 
         self._prepare_adjustment_data()
 
+    @staticmethod
+    def _market_timestamp(value) -> int:
+        """Return a Lightweight Charts Unix timestamp interpreted in New York."""
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize("America/New_York")
+        else:
+            timestamp = timestamp.tz_convert("America/New_York")
+        return int(timestamp.timestamp())
+
     def _prepare_adjustment_data(self):
         if self.factor_data is not None and not self.factor_data.empty:
             factor_df = self.factor_data[["date", "factor"]].copy()
@@ -95,8 +105,18 @@ class KLineProcessorEnhanced:
         return self.current_index + self.bar_id_offset
 
     def _resample_view_frame(self, data: pd.DataFrame, view_period: str = "daily") -> pd.DataFrame:
-        if data is None or data.empty or view_period != "weekly":
+        if data is None or data.empty:
             return data.reset_index(drop=True) if data is not None else pd.DataFrame()
+
+        if view_period == "hourly":
+            if self.interval != "hourly":
+                raise ValueError("小时线视图仅适用于小时线训练")
+            return data.reset_index(drop=True)
+
+        if view_period not in {"daily", "weekly"}:
+            raise ValueError("无效的K线视图周期")
+        if self.interval != "hourly" and view_period != "weekly":
+            return data.reset_index(drop=True)
 
         frame = data.copy().sort_values("date").set_index("date")
         aggregations = {
@@ -109,9 +129,10 @@ class KLineProcessorEnhanced:
         if "amount" in frame.columns:
             aggregations["amount"] = "sum"
 
-        weekly = frame.resample("W-FRI").agg(aggregations)
-        weekly = weekly.dropna(subset=["open", "high", "low", "close"])
-        return weekly.reset_index()
+        frequency = "D" if self.interval == "hourly" and view_period == "daily" else "W-FRI"
+        aggregated = frame.resample(frequency).agg(aggregations)
+        aggregated = aggregated.dropna(subset=["open", "high", "low", "close"])
+        return aggregated.reset_index()
 
     def _build_bar_meta(self, data: pd.DataFrame) -> List[Dict]:
         if data is None or data.empty:
@@ -124,7 +145,7 @@ class KLineProcessorEnhanced:
             bar_id = index - preview_count + 1
             meta.append(
                 {
-                    "time": int(pd.Timestamp(current_date).timestamp()),
+                    "time": self._market_timestamp(current_date),
                     "bar_id": bar_id,
                     "is_preview": bar_id <= 0,
                 }
@@ -211,7 +232,7 @@ class KLineProcessorEnhanced:
         adjusted = self._calculate_adjusted_prices(self.full_data.iloc[[self.current_index]].copy(), self.adjustment_mode)
         adjusted_row = adjusted.iloc[0]
         return {
-            "time": int(current_row["date"].timestamp()),
+            "time": self._market_timestamp(current_row["date"]),
             "open": float(adjusted_row["open"]),
             "high": float(adjusted_row["high"]),
             "low": float(adjusted_row["low"]),
@@ -226,7 +247,7 @@ class KLineProcessorEnhanced:
             return None
         current_row = self.full_data.iloc[self.current_index]
         return {
-            "time": int(current_row["date"].timestamp()),
+            "time": self._market_timestamp(current_row["date"]),
             "value": float(current_row["volume"]),
             "bar_id": self.get_current_bar_id(),
             "is_preview": self.get_current_bar_id() <= 0,
@@ -236,6 +257,14 @@ class KLineProcessorEnhanced:
         if self.current_index >= len(self.full_data):
             return None
         return self.full_data.iloc[self.current_index]["date"].strftime("%Y-%m-%d")
+
+    def get_current_datetime(self) -> Optional[str]:
+        if self.current_index >= len(self.full_data):
+            return None
+        current = pd.Timestamp(self.full_data.iloc[self.current_index]["date"])
+        if self.interval == "hourly":
+            return current.strftime("%Y-%m-%d %H:%M")
+        return current.strftime("%Y-%m-%d")
 
     def get_previous_close(self) -> Optional[float]:
         if self.current_index <= 0:
@@ -251,12 +280,15 @@ class KLineProcessorEnhanced:
                 "bar_id": self.get_current_bar_id(),
                 "type": "B" if action == "buy" else "S",
                 "price": price,
-                "time": int(self.full_data.iloc[self.current_index]["date"].timestamp()),
+                "time": self._market_timestamp(self.full_data.iloc[self.current_index]["date"]),
             }
         )
 
-    def get_trade_markers(self) -> List[Dict]:
-        return self.trade_markers.copy()
+    def get_trade_markers(self, view_period: Optional[str] = None) -> List[Dict]:
+        view_period = view_period or self.interval
+        if view_period != self.interval:
+            return []
+        return [dict(marker) for marker in self.trade_markers]
 
     def next_bar(self) -> bool:
         self.factor_changed = False
@@ -298,6 +330,7 @@ class KLineProcessorEnhanced:
             "total_bars": len(self.full_data),
             "training_progress": (training_current / training_total) * 100,
             "current_date": self.get_current_date(),
+            "current_datetime": self.get_current_datetime(),
             "start_date": self.start_date.strftime("%Y-%m-%d"),
             "end_date": self.full_data.iloc[-1]["date"].strftime("%Y-%m-%d"),
             "preview_bars": self.preview_bars,

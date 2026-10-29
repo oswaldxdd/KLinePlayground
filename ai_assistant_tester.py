@@ -12,7 +12,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-APP_VERSION = "v3.3.0-us.2"
+APP_VERSION = "v3.3.0-us.3"
 
 CONFIG_FILE_NAME = ".ai_tester_config.enc"
 CRYPT_KEY = "kline_trainer_secret_key"

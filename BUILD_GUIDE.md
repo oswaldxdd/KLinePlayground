@@ -1,6 +1,6 @@
 # Windows x64 发布构建
 
-本仓库当前发布目标为 **KLinePlayground 美股 K 线复盘训练器 v3.3.0-us.2**。源码版本与 Windows 文件属性版本对应 `3.3.0-us.2` / `3.3.0.2`。
+本仓库当前发布目标为 **KLinePlayground 美股 K 线复盘训练器 v3.3.0-us.3**。源码版本与 Windows 文件属性版本对应 `3.3.0-us.3` / `3.3.0.3`。
 
 ## 构建环境
 
@@ -42,7 +42,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build_us_release
 PowerShell 返回的 SHA256 也保存在 ZIP 旁边，例如：
 
 ```powershell
-Get-FileHash .\KLinePlayground-US-v3.3.0-us.2-win-x64.zip -Algorithm SHA256
+Get-FileHash .\KLinePlayground-US-v3.3.0-us.3-win-x64.zip -Algorithm SHA256
 ```
 
 `install.bat` 现在只调用这个安全构建脚本；不要使用上游旧版安装包或旧 EXE 作为本次美股发布件。

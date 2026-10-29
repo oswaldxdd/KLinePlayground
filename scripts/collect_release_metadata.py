@@ -69,7 +69,7 @@ def main():
     manifest = {
         "product": "KLinePlayground US Market K-Line Trainer",
         "version": args.version,
-        "file_version": "3.3.0.2",
+        "file_version": "3.3.0.3",
         "architecture": "Windows x64",
         "python": "3.12.10 x64",
         "source_commit": args.source_sha,

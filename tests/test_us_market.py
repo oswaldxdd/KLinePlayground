@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 
 from backend.data_manager import DataManager
+from backend.kline_processor_enhanced import KLineProcessorEnhanced
 from backend.trade_simulator_enhanced import TradeSimulatorEnhanced
 
 
@@ -72,6 +73,156 @@ class DataManagerUsMarketTests(unittest.TestCase):
         self.assertIsNone(self.manager.get_stock_data("AAPL", source="akshare"))
         self.manager._load_cached_kline.assert_not_called()
 
+    def test_hourly_download_keeps_only_completed_regular_session_bars_in_exchange_time(self):
+        index = pd.DatetimeIndex(
+            [
+                "2024-03-08 09:30", "2024-03-08 10:30", "2024-03-08 15:30",
+                "2024-03-11 09:30", "2024-03-11 10:30", "2024-03-11 16:30",
+            ],
+            tz="America/New_York",
+            name="Datetime",
+        )
+        history = pd.DataFrame(
+            {"Open": [10, 11, 12, 13, 14, 15], "High": [11, 12, 13, 14, 15, 16],
+             "Low": [9, 10, 11, 12, 13, 14], "Close": [10.5, 11.5, 12.5, 13.5, 14.5, 15.5],
+             "Volume": [100, 200, 300, 400, 500, 600]},
+            index=index,
+        )
+        ticker = Mock()
+        ticker.history.return_value = history
+        ticker.get_history_metadata.return_value = {
+            "currency": "USD",
+            "exchangeTimezoneName": "America/New_York",
+        }
+        with patch("backend.data_manager.yf.Ticker", return_value=ticker):
+            result = self.manager._fetch_hourly_kline("AAPL")
+
+        self.assertEqual(ticker.history.call_args.kwargs["interval"], "60m")
+        self.assertEqual(ticker.history.call_args.kwargs["prepost"], False)
+        self.assertEqual(list(result["date"].dt.strftime("%Y-%m-%d %H:%M")), [
+            "2024-03-08 09:30", "2024-03-08 10:30", "2024-03-08 15:30",
+            "2024-03-11 09:30", "2024-03-11 10:30",
+        ])
+        self.assertFalse(result["date"].dt.tz)
+
+    def test_hourly_download_discards_the_still_forming_candle(self):
+        index = pd.DatetimeIndex(
+            ["2024-03-08 09:30", "2024-03-08 10:30", "2024-03-08 11:30"],
+            tz="America/New_York",
+            name="Datetime",
+        )
+        history = pd.DataFrame(
+            {"Open": [10, 11, 12], "High": [11, 12, 13], "Low": [9, 10, 11],
+             "Close": [10.5, 11.5, 12.5], "Volume": [100, 200, 300]},
+            index=index,
+        )
+        ticker = Mock()
+        ticker.history.return_value = history
+        ticker.get_history_metadata.return_value = {
+            "currency": "USD",
+            "exchangeTimezoneName": "America/New_York",
+        }
+        with patch("backend.data_manager.yf.Ticker", return_value=ticker), patch.object(
+            self.manager, "_market_now", return_value=pd.Timestamp("2024-03-08 11:00", tz="America/New_York")
+        ):
+            result = self.manager._fetch_hourly_kline("AAPL")
+
+        self.assertEqual(list(result["date"].dt.strftime("%H:%M")), ["09:30"])
+
+    def test_hourly_cache_isolated_from_daily_cache(self):
+        hourly = pd.DataFrame({
+            "date": pd.to_datetime(["2024-01-08 09:30", "2024-01-08 10:30"]),
+            "open": [10, 11], "high": [11, 12], "low": [9, 10],
+            "close": [10.5, 11.5], "volume": [100, 200],
+        })
+        daily = pd.DataFrame({
+            "date": pd.to_datetime(["2024-01-08"]),
+            "open": [10], "high": [12], "low": [9], "close": [11.5], "volume": [300],
+        })
+        with patch.object(self.manager, "_fetch_hourly_kline", return_value=hourly) as fetch:
+            loaded_hourly = self.manager.get_stock_data("AAPL", interval="hourly")
+        self.manager._save_bundle_to_cache("AAPL", daily, None)
+
+        self.assertEqual(len(loaded_hourly), 2)
+        self.assertEqual(len(self.manager._load_cached_hourly_kline("AAPL")), 2)
+        self.assertEqual(len(self.manager._load_cached_kline("AAPL")), 1)
+        fetch.assert_called_once_with("AAPL")
+        self.assertNotEqual(self.manager._hourly_cache_path("AAPL"), str(Path(self.manager.kline_dir) / "AAPL.csv"))
+
+    def test_hourly_offline_source_is_rejected_explicitly(self):
+        self.assertIn("暂不包含小时行情", self.manager.get_training_validation_error(
+            "AAPL", pd.Timestamp.now().strftime("%Y-%m-%d"), source="offline", interval="hourly"
+        ))
+
+    def test_hourly_validation_accepts_first_available_exchange_date(self):
+        bars = pd.DataFrame({
+            "date": pd.to_datetime(["2026-10-29 09:30", "2026-10-29 10:30"]),
+            "open": [10, 11], "high": [11, 12], "low": [9, 10],
+            "close": [10.5, 11.5], "volume": [100, 200],
+        })
+        with patch.object(self.manager, "_market_now", return_value=pd.Timestamp("2026-10-29 11:00", tz="America/New_York")), patch.object(
+            self.manager, "get_stock_data", return_value=bars
+        ):
+            self.assertIsNone(self.manager.get_training_validation_error(
+                "AAPL", "2026-10-29", source="yfinance", interval="hourly"
+            ))
+
+
+class HourlyKLineProcessorTests(unittest.TestCase):
+    def test_steps_one_revealed_hour_and_daily_view_aggregates_only_visible_bars(self):
+        bars = pd.DataFrame({
+            "date": pd.to_datetime([
+                "2024-03-08 09:30", "2024-03-08 10:30", "2024-03-08 11:30",
+                "2024-03-11 09:30", "2024-03-11 10:30",
+            ]),
+            "open": [100, 101, 102, 103, 104],
+            "high": [101, 102, 150, 104, 105],
+            "low": [99, 100, 101, 102, 103],
+            "close": [100.5, 101.5, 149, 103.5, 104.5],
+            "volume": [10, 20, 30, 40, 50],
+        })
+
+        class FakeManager:
+            @staticmethod
+            def get_stock_data(*_args, **_kwargs):
+                return bars.copy()
+
+            @staticmethod
+            def get_factor_data(*_args, **_kwargs):
+                return None
+
+            @staticmethod
+            def get_dividend_data(*_args, **_kwargs):
+                return None
+
+        processor = KLineProcessorEnhanced(FakeManager(), "AAPL", "2024-03-08", interval="hourly")
+        first = processor.get_visible_data(view_period="hourly")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0]["time"], pd.Timestamp("2024-03-08 09:30", tz="America/New_York").timestamp())
+        self.assertEqual(processor.get_visible_data(view_period="daily")[0]["high"], 101)
+
+        self.assertTrue(processor.next_bar())
+        second = processor.get_visible_data(view_period="hourly")
+        self.assertEqual(len(second), 2)
+        day = processor.get_visible_data(view_period="daily")[0]
+        self.assertEqual((day["open"], day["high"], day["close"], day["volume"]), (100, 102, 101.5, 30))
+        self.assertLess(day["high"], 150)
+        self.assertEqual(len(processor.get_visible_data(view_period="weekly")), 1)
+        processor.add_trade_marker("buy", 101.5)
+        self.assertTrue(processor.next_bar())
+        marker_time = processor._market_timestamp(processor.full_data.iloc[processor.current_index]["date"])
+        processor.add_trade_marker("sell", 149)
+        self.assertEqual(processor.get_trade_markers()[1]["time"], marker_time)
+        self.assertEqual(processor.get_trade_markers(view_period="daily"), [])
+        markers = processor.get_trade_markers(view_period="hourly")
+        self.assertEqual(len(markers), 2)
+        self.assertNotEqual(markers[0]["time"], markers[1]["time"])
+        marker_dates = pd.to_datetime([item["time"] for item in markers], unit="s", utc=True).tz_convert("America/New_York")
+        self.assertEqual([item.strftime("%Y-%m-%d") for item in marker_dates], ["2024-03-08", "2024-03-08"])
+        self.assertEqual([item.strftime("%H:%M") for item in marker_dates], ["10:30", "11:30"])
+        with self.assertRaisesRegex(ValueError, "仅适用于小时线训练"):
+            KLineProcessorEnhanced(FakeManager(), "AAPL", "2024-03-08", interval="daily").get_visible_data(view_period="hourly")
+
 
 class UsTradeSimulatorTests(unittest.TestCase):
     def setUp(self):
@@ -124,7 +275,8 @@ class UsTrainingApiTests(unittest.TestCase):
 
         class FakeProcessor:
             def __init__(self, *args, **kwargs):
-                pass
+                self.current_index = 0
+                self.max_index = 1
 
             @staticmethod
             def get_current_bar():
@@ -135,12 +287,28 @@ class UsTrainingApiTests(unittest.TestCase):
                 return "2024-01-08"
 
             @staticmethod
+            def get_current_datetime():
+                return "2024-01-08"
+
+            @staticmethod
             def add_trade_marker(*args):
                 pass
 
             @staticmethod
-            def get_trade_markers():
+            def get_trade_markers(*_args, **_kwargs):
                 return []
+
+            @staticmethod
+            def get_full_data(*_args, **_kwargs):
+                return [{"time": 1, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}]
+
+            @staticmethod
+            def get_volume_data(*_args, **_kwargs):
+                return []
+
+            @staticmethod
+            def get_ma_data(*_args, **_kwargs):
+                return {}
 
         fake_users = SimpleNamespace(get_user_config=lambda _user: {"settings": {}})
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as users_dir, patch.object(app_module, "data_manager", FakeDataManager()), patch.object(app_module, "user_manager", fake_users), patch.object(app_module, "KLineProcessorEnhanced", FakeProcessor), patch.object(app_module, "users_dir_path", users_dir), patch.object(app_module, "_update_api_info"), patch.object(app_module, "active_trainings", {}):
@@ -151,6 +319,10 @@ class UsTrainingApiTests(unittest.TestCase):
             )
             self.assertEqual(started.status_code, 200)
             training_id = started.get_json()["id"]
+            unrevealed = client.get(f"/api/training/{training_id}/full_data")
+            self.assertEqual(unrevealed.status_code, 403)
+            self.assertIn("训练结束后", unrevealed.get_json()["error"])
+
             account = client.get(f"/api/training/{training_id}/account").get_json()
             self.assertEqual(account["max_buyable_quantity"], 10)
 
@@ -168,6 +340,10 @@ class UsTrainingApiTests(unittest.TestCase):
             whole_share = client.post(f"/api/training/{training_id}/trade", json={"action": "buy", "quantity": 1})
             self.assertEqual(whole_share.status_code, 200)
             self.assertEqual(whole_share.get_json()["trade"]["quantity"], 1)
+
+            app_module.active_trainings[training_id]["status"] = "ended"
+            completed = client.get(f"/api/training/{training_id}/full_data")
+            self.assertEqual(completed.status_code, 200)
 
 
 if __name__ == "__main__":

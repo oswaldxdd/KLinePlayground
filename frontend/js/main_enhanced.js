@@ -72,11 +72,59 @@ function updatePeriodBadge(period) {
     currentPeriod = period || 'daily';
     const badge = document.getElementById('current-period');
     if (badge) {
-        badge.textContent = currentPeriod === 'weekly' ? '周K' : '日K';
+        badge.textContent = currentPeriod === 'weekly' ? '周K' : (currentPeriod === 'hourly' ? '60分K' : '日K');
     }
     document.querySelectorAll('.view-period-btn').forEach((button) => {
         button.classList.toggle('active', button.dataset.period === currentPeriod);
     });
+}
+
+function updateTrainingPeriodOptions() {
+    const sourceSelect = document.getElementById('data-source');
+    const periodSelect = document.getElementById('kline-period');
+    const hourlyOption = periodSelect?.querySelector('option[value="hourly"]');
+    const help = document.getElementById('kline-period-help');
+    const offline = sourceSelect?.value === 'offline';
+    if (hourlyOption) hourlyOption.disabled = Boolean(offline);
+    if (offline && periodSelect?.value === 'hourly') periodSelect.value = 'daily';
+    if (help) {
+        help.textContent = offline
+            ? '本地离线数据暂不包含小时线，请选择 Yahoo Finance 使用 60 分钟数据。'
+            : '小时线使用 Yahoo Finance 最近约 730 天的美东常规交易时段数据。';
+    }
+}
+
+function updateAvailableViewPeriods(trainingPeriod) {
+    const hourlyButton = document.querySelector('.view-period-btn[data-period="hourly"]');
+    if (!hourlyButton) return;
+    const supportsHourly = trainingPeriod === 'hourly';
+    hourlyButton.classList.toggle('hidden', !supportsHourly);
+    if (!supportsHourly && currentPeriod === 'hourly') updatePeriodBadge('daily');
+}
+
+function asExchangeTimestamp(time) {
+    if (typeof time === 'number') return time;
+    if (time && typeof time === 'object' && Number.isFinite(time.year)) {
+        return Date.UTC(time.year, (time.month || 1) - 1, time.day || 1) / 1000;
+    }
+    return Number(time) || 0;
+}
+
+function formatExchangeTimestamp(time, includeTime = currentPeriod === 'hourly') {
+    const timestamp = asExchangeTimestamp(time);
+    const options = includeTime
+        ? { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+        : { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' };
+    return new Intl.DateTimeFormat('zh-CN', options).format(new Date(timestamp * 1000));
+}
+
+function getExchangeDateString(daysAgo = 0) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+    return new Date(Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day) - daysAgo))
+        .toISOString().slice(0, 10);
 }
 
 async function persistUserSettings(partialSettings) {
@@ -662,6 +710,8 @@ function setupEventListeners() {
     document.getElementById('new-training-btn').addEventListener('click', showTrainingSetup);
     document.getElementById('cancel-setup-btn').addEventListener('click', hideTrainingSetup);
     document.getElementById('start-training-btn').addEventListener('click', startTraining);
+    document.getElementById('data-source')?.addEventListener('change', updateTrainingPeriodOptions);
+    document.getElementById('kline-period')?.addEventListener('change', updateTrainingPeriodOptions);
 
     // 设置按钮
     document.getElementById('settings-btn')?.addEventListener('click', showSettings);
@@ -679,6 +729,7 @@ function setupEventListeners() {
             switchViewPeriod(button.dataset.period || 'daily');
         });
     });
+    updateTrainingPeriodOptions();
 
     // 标签页切换
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -1146,9 +1197,10 @@ async function showTrainingSetup(returnScreen = null) {
     }
     document.getElementById('training-setup').classList.remove('hidden');
     // 设置默认日期为一年前
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    document.getElementById('start-date').value = oneYearAgo.toISOString().split('T')[0];
+    document.getElementById('start-date').value = getExchangeDateString(365);
+    document.getElementById('random-start-date').value = getExchangeDateString(365);
+    document.getElementById('random-end-date').value = getExchangeDateString();
+    updateTrainingPeriodOptions();
 }
 
 function hideTrainingSetup() {
@@ -1664,7 +1716,8 @@ async function refreshTrainingView(options = {}) {
 }
 
 async function switchViewPeriod(period) {
-    const nextPeriod = period === 'weekly' ? 'weekly' : 'daily';
+    const nextPeriod = ['weekly', 'hourly'].includes(period) ? period : 'daily';
+    if (nextPeriod === 'hourly' && currentTraining?.period !== 'hourly') return;
     if (currentPeriod === nextPeriod) {
         updatePeriodBadge(nextPeriod);
         return;
@@ -1675,7 +1728,8 @@ async function switchViewPeriod(period) {
         return;
     }
 
-    showLoading(nextPeriod === 'weekly' ? '正在切换周K视图' : '正在切换日K视图');
+    const periodLabel = nextPeriod === 'weekly' ? '周K' : (nextPeriod === 'hourly' ? '小时K' : '日K');
+    showLoading(`正在切换${periodLabel}视图`);
     try {
         await refreshTrainingView({ preserveRange: false, fitContent: true });
     } catch (error) {
@@ -1691,7 +1745,7 @@ async function startTraining() {
     const isRandomMode = document.querySelector('.tab-btn.active').dataset.tab === 'random';
     const initialCapital = parseFloat(document.getElementById('initial-capital').value);
     const dataSource = document.getElementById('data-source').value || 'yfinance';
-    const period = 'daily';
+    const period = document.getElementById('kline-period')?.value || 'daily';
 
     let trainingConfig = {
         user: currentUser,
@@ -1719,7 +1773,7 @@ async function startTraining() {
     }
 
     try {
-        updatePeriodBadge('daily');
+        updatePeriodBadge(period);
         showLoading(
             dataSource === 'offline' ? '正在筛选本地离线数据' : '正在创建训练',
             dataSource === 'offline' ? '首次校验离线股票可用范围时会稍慢一些。' : '正在准备图表和训练数据...'
@@ -1734,7 +1788,9 @@ async function startTraining() {
 
         if (response.ok) {
             currentTraining = await response.json();
-            currentTraining.period = 'daily';
+            currentTraining.period = currentTraining.period || period;
+            updateAvailableViewPeriods(currentTraining.period);
+            updatePeriodBadge(currentTraining.period);
             currentReportData = null;
             hideTrainingSetup();
             document.getElementById('report-interface').classList.add('hidden');
@@ -1813,27 +1869,14 @@ function initializeChart() {
         // 使用 localization 选项来格式化十字标线的时间
         localization: {
             // timeFormatter 用于格式化十字标线悬浮窗中的时间
-            timeFormatter: (businessDay) => {
-                // businessDay 是一个 Date 对象，包含了年、月、日
-                // 注意：这里的 businessDay 是一个 UTC 日期对象，所以使用 getUTCFullYear 等方法可以避免时区问题
-                const date = new Date(businessDay * 1000);
-
-                const year = date.getUTCFullYear();
-                const month = ('0' + (date.getUTCMonth() + 1)).slice(-2); // 月份从0开始
-                const day = ('0' + date.getUTCDate()).slice(-2);
-
-                return `${year}年${month}月${day}日`;
-            },
+            timeFormatter: (time) => formatExchangeTimestamp(time),
             locale: 'zh-CN',
         },
         timeScale: {
             borderColor: palette.border,
             timeVisible: true,
             secondsVisible: false,
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-            }
+            tickMarkFormatter: (time) => formatExchangeTimestamp(time),
         },
     });
 
@@ -1899,10 +1942,7 @@ function initializeChart() {
         timeScale: {
             borderColor: palette.border,
             visible: false,
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-            }
+            tickMarkFormatter: (time) => formatExchangeTimestamp(time),
         },
     });
 
@@ -1953,10 +1993,7 @@ function initializeChart() {
         timeScale: {
             borderColor: palette.border,
             visible: false,
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-            }
+            tickMarkFormatter: (time) => formatExchangeTimestamp(time),
         },
     });
 
@@ -2290,9 +2327,7 @@ function updateCurrentInfo(barData, progress) {
     if (!barData) return;
     const palette = getThemePalette();
 
-    const date = new Date(barData.time * 1000);
-    const formattedDate = `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-    document.getElementById('current-date').textContent = formattedDate;
+    document.getElementById('current-date').textContent = formatExchangeTimestamp(barData.time);
     document.getElementById('current-price').textContent = `$${barData.close.toFixed(2)}`;
 
     // 显示当前bar ID
@@ -2464,7 +2499,7 @@ async function nextBar() {
             } else {
                 // 更新图表数据
                 if (data.new_bar) {
-                    if (currentPeriod === 'weekly') {
+                    if (currentPeriod === 'weekly' || (currentTraining?.period === 'hourly' && currentPeriod === 'daily')) {
                         await refreshTrainingView({ preserveRange: true });
                     } else {
                         candlestickSeries.update(data.new_bar);
@@ -2742,7 +2777,7 @@ async function updateAdjustment(targetRange = null) {
             applyTrainingSnapshot({
                 ...data,
                 progress: currentTraining?.latestProgress || null,
-                trade_markers: currentPeriod === 'daily' ? (currentTraining?.tradeMarkers || []) : []
+                trade_markers: currentTraining?.period === currentPeriod ? (currentTraining?.tradeMarkers || []) : []
             });
             renderChartLegend();
             
@@ -2785,7 +2820,7 @@ async function executeBuy(priceType = 'close') {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/training/${currentTraining.id}/trade`, {
+        const response = await fetch(`${API_BASE}/training/${currentTraining.id}/trade?${getViewPeriodQuery()}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -2801,6 +2836,7 @@ async function executeBuy(priceType = 'close') {
             const result = await response.json();
             updateAccountInfo();
             addTradeRecord(result.trade);
+            currentTraining.tradeMarkers = result.trade_markers || [];
             updateTradeMarkers(result.trade_markers);
             if (result.trade_markers) {
                 lastKnownTradeCount = result.trade_markers.length;
@@ -2830,7 +2866,7 @@ async function executeSell(priceType = 'close') {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/training/${currentTraining.id}/trade`, {
+        const response = await fetch(`${API_BASE}/training/${currentTraining.id}/trade?${getViewPeriodQuery()}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -2846,6 +2882,7 @@ async function executeSell(priceType = 'close') {
             const result = await response.json();
             updateAccountInfo();
             addTradeRecord(result.trade);
+            currentTraining.tradeMarkers = result.trade_markers || [];
             updateTradeMarkers(result.trade_markers);
         } else {
             const error = await response.json();
@@ -3056,7 +3093,7 @@ async function forceLiquidatePosition() {
                 console.log(`检测到可卖持仓 ${availableShares} 股，正在执行卖出...`);
                 const sellQuantity = availableShares;
 
-                const sellResponse = await fetch(`${API_BASE}/training/${currentTraining.id}/trade`, {
+                const sellResponse = await fetch(`${API_BASE}/training/${currentTraining.id}/trade?${getViewPeriodQuery()}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'sell', quantity: sellQuantity })
@@ -3071,6 +3108,7 @@ async function forceLiquidatePosition() {
                 const result = await sellResponse.json();
                 updateAccountInfo();
                 addTradeRecord(result.trade);
+                currentTraining.tradeMarkers = result.trade_markers || [];
                 updateTradeMarkers(result.trade_markers);
                 console.log(`成功卖出 ${sellQuantity} 股。`);
 

@@ -26,18 +26,22 @@ except ImportError:
 
 
 class DataManager:
-    """管理美股行情下载、缓存、周K合成以及离线增量补数。"""
+    """管理美股日线、周线、小时行情下载与缓存，以及离线增量补数。"""
 
     def __init__(self, data_dir: str = "./data"):
         self.data_dir = data_dir
         # Separate paths prevent old A-share files from being interpreted as US symbols.
         self.market_data_dir = os.path.join(data_dir, "us_market")
         self.kline_dir = os.path.join(self.market_data_dir, "kline_raw")
+        # Intraday bars have different timestamp granularity and Yahoo history
+        # limits, so never share or overwrite the daily CSV cache.
+        self.hourly_dir = os.path.join(self.market_data_dir, "kline_hourly")
         self.factor_dir = os.path.join(self.market_data_dir, "factor")
         self.dividend_dir = os.path.join(self.market_data_dir, "corporate_actions")
         self.offline_dir = os.path.join(data_dir, "us_market_offline")
 
         os.makedirs(self.kline_dir, exist_ok=True)
+        os.makedirs(self.hourly_dir, exist_ok=True)
         os.makedirs(self.factor_dir, exist_ok=True)
         os.makedirs(self.dividend_dir, exist_ok=True)
         os.makedirs(self.offline_dir, exist_ok=True)
@@ -45,7 +49,9 @@ class DataManager:
         self.stock_list = None
         self.stock_names: Dict[str, str] = {}
         self._refreshed_symbols = set()
+        self._refreshed_hourly_symbols = set()
         self._last_data_error: Dict[str, str] = {}
+        self._last_hourly_data_error: Dict[str, str] = {}
         self._offline_stock_codes_cache: Optional[List[str]] = None
         self._offline_date_range_cache: Dict[str, Optional[Tuple[pd.Timestamp, pd.Timestamp]]] = {}
 
@@ -634,6 +640,111 @@ class DataManager:
             daily_df = daily_df.drop(columns=["adj_close"], errors="ignore")
         return {"kline": daily_df, "factor": factor_df}
 
+    def _fetch_hourly_kline(self, stock_code: str) -> pd.DataFrame:
+        """Fetch genuine Yahoo 60-minute regular-session bars (last two years)."""
+        stock_code = self._normalize_stock_code(stock_code)
+        if not stock_code:
+            raise ValueError("请输入有效的美股代码，例如 AAPL 或 BRK-B")
+
+        ticker = yf.Ticker(stock_code)
+        last_error = None
+        history = None
+        for attempt in range(2):
+            try:
+                history = ticker.history(
+                    period="2y",
+                    interval="60m",
+                    prepost=False,
+                    auto_adjust=False,
+                    actions=False,
+                    timeout=20,
+                    raise_errors=True,
+                )
+                if history is not None and not history.empty:
+                    break
+                last_error = RuntimeError("Yahoo Finance returned no 60-minute price rows")
+            except Exception as exc:
+                last_error = exc
+            if attempt == 0:
+                time.sleep(0.5)
+
+        if history is None or history.empty:
+            raise RuntimeError(
+                f"Yahoo Finance 暂未返回 {stock_code} 的 60 分钟行情。Yahoo 的小时线历史约限最近 730 天；"
+                "请检查代码、日期和网络，或改用日线训练。"
+            ) from last_error
+
+        try:
+            metadata = ticker.get_history_metadata()
+        except Exception as exc:
+            raise RuntimeError(f"无法确认 {stock_code} 的币种和交易所信息，已停止导入小时行情") from exc
+        if metadata.get("currency") != "USD" or metadata.get("exchangeTimezoneName") != "America/New_York":
+            raise ValueError(f"{stock_code} 不是以美元计价的美国市场标的，无法用于本训练器")
+
+        frame = history.copy().rename_axis("Datetime").reset_index()
+        timestamp_column = "Datetime" if "Datetime" in frame.columns else "Date"
+        if timestamp_column not in frame.columns:
+            raise RuntimeError("Yahoo Finance 返回的小时行情缺少时间戳")
+
+        timestamps = pd.DatetimeIndex(pd.to_datetime(frame[timestamp_column], errors="coerce"))
+        if timestamps.tz is None:
+            timestamps = timestamps.tz_localize("America/New_York")
+        else:
+            timestamps = timestamps.tz_convert("America/New_York")
+        # Yahoo's prepost=False is the primary session filter. Keep the explicit
+        # exchange-time guard as defense against extended-hours rows in cached or
+        # provider-returned data. Hour labels are bar start times; 15:30 is the
+        # regular session's final (normally 30-minute) candle.
+        minute_of_day = timestamps.hour * 60 + timestamps.minute
+        session_mask = pd.Series(
+            (minute_of_day >= 9 * 60 + 30) & (minute_of_day <= 15 * 60 + 30),
+            index=frame.index,
+        )
+        # Yahoo can return the currently forming candle. A normal candle ends
+        # one hour after its start; the 15:30 candle is the regular session's
+        # final half-hour. For early closes the one-hour rule waits an extra
+        # half-hour, which is conservative and avoids exposing a partial bar.
+        bar_ends = timestamps + pd.Timedelta(hours=1)
+        closing_candle = minute_of_day == 15 * 60 + 30
+        bar_ends = bar_ends.where(~closing_candle, timestamps + pd.Timedelta(minutes=30))
+        now_et = self._market_now()
+        session_mask &= pd.Series(bar_ends <= now_et, index=frame.index)
+        frame[timestamp_column] = timestamps.tz_localize(None)
+        frame = frame.loc[session_mask].copy()
+        normalized = self._normalize_daily_kline(frame)
+        if normalized is None or normalized.empty:
+            raise RuntimeError(
+                f"Yahoo Finance 未返回 {stock_code} 可用的美东常规交易时段小时线；请改用日线训练。"
+            )
+        normalized = normalized.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+        return normalized.drop(columns=["adj_close", "dividends", "stock_splits"], errors="ignore")
+
+    @staticmethod
+    def _market_now() -> pd.Timestamp:
+        return pd.Timestamp.now(tz="America/New_York")
+
+    def _hourly_cache_path(self, stock_code: str) -> str:
+        return os.path.join(self.hourly_dir, f"{stock_code}.csv")
+
+    def _load_cached_hourly_kline(self, stock_code: str) -> Optional[pd.DataFrame]:
+        path = self._hourly_cache_path(stock_code)
+        if not os.path.isfile(path):
+            return None
+        try:
+            cached = pd.read_csv(path)
+            return self._normalize_daily_kline(cached)
+        except Exception as exc:
+            print(f"读取 {stock_code} 小时行情缓存失败: {exc}")
+            return None
+
+    def _save_hourly_kline(self, stock_code: str, data: Optional[pd.DataFrame]) -> bool:
+        if data is None or data.empty:
+            return False
+        saved = data.copy().sort_values("date").drop_duplicates(subset=["date"], keep="last")
+        saved["date"] = pd.to_datetime(saved["date"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        saved.to_csv(self._hourly_cache_path(stock_code), index=False, encoding="utf-8")
+        return True
+
     def _fetch_stock_bundle_ak(
         self,
         stock_code: str,
@@ -939,10 +1050,39 @@ class DataManager:
         source: str = "yfinance",
         interval: str = "daily",
     ) -> Optional[pd.DataFrame]:
-        """获取股票 K 线数据，支持日K与周K。"""
+        """获取股票 K 线数据，支持 Yahoo 日K、小时K及周K合成。"""
         stock_code = self._normalize_stock_code(stock_code)
         if source not in {"yfinance", "offline"}:
             return None
+        if interval == "hourly":
+            if source != "yfinance":
+                self._last_hourly_data_error[stock_code] = "本地离线数据暂不包含小时行情，请切换到 Yahoo Finance。"
+                return None
+            try:
+                normalized = self._load_cached_hourly_kline(stock_code)
+                if normalized is None:
+                    normalized = self._fetch_hourly_kline(stock_code)
+                    self._save_hourly_kline(stock_code, normalized)
+                    self._refreshed_hourly_symbols.add(stock_code)
+                elif stock_code not in self._refreshed_hourly_symbols:
+                    # Refresh once per process so the most recent available bar
+                    # appears while allowing the last valid cache to survive an outage.
+                    try:
+                        refreshed = self._fetch_hourly_kline(stock_code)
+                        if refreshed is not None and not refreshed.empty:
+                            normalized = refreshed
+                            self._save_hourly_kline(stock_code, normalized)
+                    except Exception as exc:
+                        self._last_hourly_data_error[stock_code] = str(exc)
+                        print(f"更新 {stock_code} 小时行情缓存失败，继续使用本地副本: {exc}")
+                    finally:
+                        self._refreshed_hourly_symbols.add(stock_code)
+                self._last_hourly_data_error.pop(stock_code, None)
+                return normalized
+            except Exception as exc:
+                self._last_hourly_data_error[stock_code] = str(exc)
+                print(f"获取股票 {stock_code} 小时线失败: {exc}")
+                return None
         try:
             if source == "offline":
                 offline_path = self._get_offline_file(stock_code)
@@ -990,6 +1130,10 @@ class DataManager:
     ) -> Optional[pd.DataFrame]:
         """获取复权因子数据，周K会按周最后一个交易日聚合。"""
         stock_code = self._normalize_stock_code(stock_code)
+        if interval == "hourly":
+            # Hourly bars already use Yahoo's current split-adjusted price basis;
+            # joining daily adjustment factors would introduce lookahead.
+            return None
         try:
             if source == "offline":
                 offline_path = self._get_offline_file(stock_code)
@@ -1047,6 +1191,16 @@ class DataManager:
         except Exception:
             return "起始日期格式无效"
 
+        if interval == "hourly":
+            if source != "yfinance":
+                return "本地离线数据暂不包含小时行情，请切换到 Yahoo Finance。"
+            cutoff = self._market_now().tz_localize(None).normalize() - pd.Timedelta(days=730)
+            if start_dt.normalize() < cutoff:
+                return (
+                    f"Yahoo Finance 的 60 分钟小时线约只提供最近 730 天，当前起始日期 {start_dt:%Y-%m-%d} "
+                    f"早于可用范围；请将日期调整到 {cutoff:%Y-%m-%d} 之后，或改用日线训练。"
+                )
+
         data = self.get_stock_data(stock_code, source=source, interval=interval)
         if data is None or data.empty:
             if source == "offline":
@@ -1055,11 +1209,22 @@ class DataManager:
                 return "指定股票在离线数据中没有可用数据"
             if source == "yfinance" and stock_code in self._last_data_error:
                 return f"Yahoo Finance 行情下载失败：{self._last_data_error[stock_code]}"
+            if interval == "hourly" and stock_code in self._last_hourly_data_error:
+                return f"Yahoo Finance 小时行情下载失败：{self._last_hourly_data_error[stock_code]}"
             return "指定股票暂无可用数据，请切换数据源或稍后重试"
 
         min_date = data["date"].min()
         max_date = data["date"].max()
-        if start_dt < min_date or start_dt > max_date:
+        if interval == "hourly":
+            # The user chooses an exchange date, not a wall-clock timestamp;
+            # 00:00 is before that day's first 09:30 bar by design.
+            requested_date = start_dt.normalize()
+            available_start = min_date.normalize()
+            available_end = max_date.normalize()
+            out_of_range = requested_date < available_start or requested_date > available_end
+        else:
+            out_of_range = start_dt < min_date or start_dt > max_date
+        if out_of_range:
             if source == "offline":
                 return f"起始日期不在该股票离线数据范围内（{min_date:%Y-%m-%d} ~ {max_date:%Y-%m-%d}）"
             return f"起始日期不在该股票数据范围内（{min_date:%Y-%m-%d} ~ {max_date:%Y-%m-%d}）"

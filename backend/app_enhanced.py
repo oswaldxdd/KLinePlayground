@@ -297,6 +297,9 @@ def start_training():
         data_source = data.get('data_source', 'yfinance')
         period = data.get('period', 'daily')
         initial_capital = data.get('initial_capital', 100000)
+
+        if period not in {'daily', 'weekly', 'hourly'}:
+            return jsonify({'error': 'K线周期无效，请选择日K、周K或60分钟。'}), 400
         
         if not user:
             return jsonify({'error': '用户名不能为空'}), 400
@@ -363,6 +366,7 @@ def start_training():
             'mode': mode,
             'data_source': data_source,
             'period': period,
+            'status': 'active',
             'created_at': datetime.now()
         }
         
@@ -390,7 +394,7 @@ def get_training_data(training_id):
         
         training = active_trainings[training_id]
         kline_processor = training['kline_processor']
-        view_period = request.args.get('view_period', 'daily')
+        view_period = request.args.get('view_period', training.get('period', 'daily'))
         
         # 获取当前可见的K线数据
         kline_data = kline_processor.get_visible_data(view_period=view_period)
@@ -417,7 +421,7 @@ def get_training_data(training_id):
             'volume_data': volume_data,
             'ma_data': ma_data,
             'progress': progress,
-            'trade_markers': kline_processor.get_trade_markers() if view_period == 'daily' else [],
+            'trade_markers': kline_processor.get_trade_markers(view_period=view_period),
             'period': training.get('period', 'daily'),
             'view_period': view_period,
             'data_source': training.get('data_source', 'yfinance')
@@ -465,6 +469,7 @@ def next_bar(training_id):
                 'status': 'completed'
             }
             user_manager.save_training_session(training['user'], session_data)
+            training['status'] = 'completed'
             
             return jsonify({
                 'finished': True,
@@ -510,9 +515,8 @@ def update_adjustment(training_id):
         adjustment = data.get('adjustment', 'none')
         if adjustment != 'none':
             return jsonify({'error': '美股训练仅支持 Yahoo 拆股调整历史价格，复权模式必须为 none'}), 400
-        view_period = request.args.get('view_period', 'daily')
-        
         training = active_trainings[training_id]
+        view_period = request.args.get('view_period', training.get('period', 'daily'))
         kline_processor = training['kline_processor']
         
         # 更新复权设置
@@ -548,8 +552,10 @@ def get_full_data(training_id):
             return jsonify({'error': '训练会话已结束或不存在，无法获取完整走势'}), 404
         
         training = active_trainings[training_id]
+        if training.get('status', 'active') not in {'ended', 'completed'}:
+            return jsonify({'error': '训练结束后才能查看未揭晓的后续走势。'}), 403
         kline_processor = training['kline_processor']
-        view_period = request.args.get('view_period', 'daily')
+        view_period = request.args.get('view_period', training.get('period', 'daily'))
         
         kline_data = kline_processor.get_full_data(view_period=view_period)
         
@@ -581,7 +587,7 @@ def get_full_data(training_id):
             'kline_data': kline_data,
             'volume_data': volume_data,
             'ma_data': ma_data,
-            'trade_markers': kline_processor.get_trade_markers() if view_period == 'daily' else [],
+            'trade_markers': kline_processor.get_trade_markers(view_period=view_period),
             'period': training.get('period', 'daily'),
             'view_period': view_period,
             'data_source': training.get('data_source', 'yfinance')
@@ -613,7 +619,7 @@ def execute_trade(training_id):
         # 获取当前价格
         current_bar = kline_processor.get_current_bar()
         current_price = current_bar['open'] if price_type == 'open' else current_bar['close']
-        current_date = kline_processor.get_current_date()
+        current_date = kline_processor.get_current_datetime()
         trade_simulator.update_current_price(current_bar['close'], current_bar['bar_id'])
         
         # 执行交易
@@ -627,11 +633,12 @@ def execute_trade(training_id):
         if result['success']:
             # 添加交易标记到K线图
             kline_processor.add_trade_marker(action, current_price)
+            view_period = request.args.get('view_period', training.get('period', 'daily'))
             
             return jsonify({
                 'success': True,
                 'trade': result['trade'],
-                'trade_markers': kline_processor.get_trade_markers()
+                'trade_markers': kline_processor.get_trade_markers(view_period=view_period)
             })
         else:
             return jsonify({'error': result['message']}), 400
@@ -648,7 +655,7 @@ def get_account_info(training_id):
         training = active_trainings[training_id]
         trade_simulator = training['trade_simulator']
 
-        current_date = training['kline_processor'].get_current_date()
+        current_date = training['kline_processor'].get_current_datetime()
 
         account_info = trade_simulator.get_account_info(current_date)
         return jsonify(account_info)
@@ -679,7 +686,7 @@ def get_technical_indicators(training_id, indicator_type):
         
         training = active_trainings[training_id]
         kline_processor = training['kline_processor']
-        view_period = request.args.get('view_period', 'daily')
+        view_period = request.args.get('view_period', training.get('period', 'daily'))
         
         # 获取用户自定义的技术指标参数
         user = training['user']
@@ -824,8 +831,9 @@ def get_chip_distribution(training_id):
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
             
-        kline_processor = active_trainings[training_id]['kline_processor']
-        view_period = request.args.get('view_period', 'daily')
+        training = active_trainings[training_id]
+        kline_processor = training['kline_processor']
+        view_period = request.args.get('view_period', training.get('period', 'daily'))
         
         # 可选增加 bins 参数，如果前端要求更精细的分布
         bins = int(request.args.get('bins', 80))

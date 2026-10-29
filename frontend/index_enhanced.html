@@ -45,7 +45,7 @@
                 <h1>美股 K 线复盘训练</h1>
                 <p>使用美元历史行情训练交易决策，支持日线、周线和 AI 复盘。</p>
             </div>
-            <div class="version-badge">v3.3.0-us.2</div>
+            <div class="version-badge">v3.3.0-us.3</div>
             <div class="user-list">
                 <h2>选择用户</h2>
                 <div id="existing-users"></div>
@@ -215,12 +215,14 @@
                             <option value="offline">本地离线数据</option>
                         </select>
                     </div>
-                    <div class="form-group hidden">
+                    <div class="form-group">
                         <label>K线周期</label>
                         <select id="kline-period">
                             <option value="daily" selected>日K</option>
                             <option value="weekly">周K</option>
+                            <option value="hourly">60分钟</option>
                         </select>
+                        <small id="kline-period-help" class="helper-text">小时线使用 Yahoo Finance 最近约 730 天的美东常规交易时段数据。</small>
                     </div>
                     <div class="form-group">
                         <label>初始资金</label>
@@ -343,6 +345,7 @@
                         <div class="view-period-switch">
                             <button class="view-period-btn active" data-period="daily">日线</button>
                             <button class="view-period-btn" data-period="weekly">周线</button>
+                            <button class="view-period-btn hidden" data-period="hourly">小时</button>
                         </div>
                     </div>
                 </div>
